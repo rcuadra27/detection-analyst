@@ -1,0 +1,62 @@
+{
+  "n": 80,
+  "severity_accuracy": 0.4,
+  "severity_off_by_one": 0.9,
+  "technique_hit_rate": 0.475,
+  "technique_jaccard": 0.30083333333333334,
+  "faithfulness": 1.0,
+  "per_class": {
+    "analysis": {
+      "severity": 0.875,
+      "technique": 0.625,
+      "faithfulness": 1.0
+    },
+    "backdoor": {
+      "severity": 0.0,
+      "technique": 0.125,
+      "faithfulness": 1.0
+    },
+    "dos": {
+      "severity": 0.125,
+      "technique": 0.25,
+      "faithfulness": 1.0
+    },
+    "exploits": {
+      "severity": 0.25,
+      "technique": 0.375,
+      "faithfulness": 1.0
+    },
+    "fuzzers": {
+      "severity": 0.375,
+      "technique": 0.375,
+      "faithfulness": 1.0
+    },
+    "generic": {
+      "severity": 0.0,
+      "technique": 0.0,
+      "faithfulness": 1.0
+    },
+    "normal": {
+      "severity": 0.875,
+      "technique": 0.875,
+      "faithfulness": 1.0
+    },
+    "reconnaissance": {
+      "severity": 0.875,
+      "technique": 0.875,
+      "faithfulness": 1.0
+    },
+    "shellcode": {
+      "severity": 0.625,
+      "technique": 0.625,
+      "faithfulness": 1.0
+    },
+    "worms": {
+      "severity": 0.0,
+      "technique": 0.625,
+      "faithfulness": 1.0
+    }
+  },
+  "detector_class_accuracy": 0.5625,
+  "threshold": 0.85
+}

@@ -1,0 +1,46 @@
+{
+  "taxonomy": "grouped",
+  "threshold": 0.85,
+  "stage2_balance": "balanced",
+  "accuracy": 0.8081426419861051,
+  "balanced_accuracy": 0.6409797871598661,
+  "per_class": {
+    "discovery": {
+      "precision": 0.6320984489168056,
+      "recall": 0.4817782120175867,
+      "f1": 0.5467952982923043,
+      "support": 10235
+    },
+    "exploitation": {
+      "precision": 0.7897623400365631,
+      "recall": 0.6380538662033015,
+      "f1": 0.7058484309673699,
+      "support": 11510
+    },
+    "generic": {
+      "precision": 0.9982552750667902,
+      "recall": 0.9702188543267447,
+      "f1": 0.9840374072879716,
+      "support": 18871
+    },
+    "impact": {
+      "precision": 0.3446514423076923,
+      "recall": 0.2805086818292981,
+      "f1": 0.30928947013617364,
+      "support": 4089
+    },
+    "normal": {
+      "precision": 0.9169127623912523,
+      "recall": 0.9314594594594594,
+      "f1": 0.9241288696421629,
+      "support": 37000
+    },
+    "persistence": {
+      "precision": 0.0570615796519411,
+      "recall": 0.543859649122807,
+      "f1": 0.10328638497652583,
+      "support": 627
+    }
+  },
+  "sweep": null
+}

@@ -1,0 +1,11 @@
+detection_analyst/
+__pycache__/
+*.pyc
+.env
+.ipynb_checkpoints/
+.DS_Store
+
+data/raw/
+data/processed/*
+!data/processed/*.json
+!data/processed/eval_set*.jsonl
