@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Detection Analyst Example Output</title>
+  <style>
+    :root {
+      --surface-0: #eef3fb;
+      --surface-1: #f8fbff;
+      --surface-2: #ffffff;
+      --surface-3: #e8f0fb;
+      --text-primary: #172033;
+      --text-secondary: #526176;
+      --border: #cad6e6;
+      --accent: #2563eb;
+      --accent-soft: #dbeafe;
+      --accent-text: #123a84;
+      --warning: #fff3cd;
+      --warning-border: #f0c95a;
+      --shadow: rgba(20, 32, 55, 0.18);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 680px;
+      height: 600px;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, var(--surface-0), #dde8f7);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    .frame {
+      width: 632px;
+      padding: 24px;
+      border: 1px solid var(--border);
+      border-radius: 30px;
+      background: var(--surface-1);
+      box-shadow: 0 24px 60px var(--shadow);
+    }
+
+    .title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 27px;
+      letter-spacing: -0.04em;
+    }
+
+    .badge {
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent-text);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 48px 1.45fr;
+      align-items: stretch;
+      gap: 14px;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      background: var(--surface-2);
+      overflow: hidden;
+    }
+
+    .card h2 {
+      margin: 0;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-3);
+      font-size: 15px;
+    }
+
+    .content {
+      padding: 16px;
+    }
+
+    .input-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .kv {
+      padding: 10px;
+      border-radius: 14px;
+      background: var(--surface-3);
+      min-width: 0;
+    }
+
+    .kv span {
+      display: block;
+      color: var(--text-secondary);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .kv strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 16px;
+    }
+
+    .arrow {
+      position: relative;
+      align-self: center;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    .arrow::after {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: 50%;
+      width: 13px;
+      height: 13px;
+      border-top: 4px solid var(--accent);
+      border-right: 4px solid var(--accent);
+      border-radius: 2px;
+      transform: translateY(-50%) rotate(45deg);
+    }
+
+    .classification {
+      padding: 14px;
+      border-radius: 16px;
+      background: var(--accent);
+      color: #f8fbff;
+      font-size: 22px;
+      font-weight: 850;
+      letter-spacing: -0.03em;
+    }
+
+    .classification small {
+      display: block;
+      margin-top: 4px;
+      color: #dbeafe;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+      margin: 12px 0;
+    }
+
+    .summary .kv {
+      background: #f3f7fd;
+      padding: 8px;
+    }
+
+    .summary .kv span {
+      font-size: 9px;
+      letter-spacing: 0.05em;
+    }
+
+    .summary strong {
+      font-size: 13px;
+    }
+
+    .techniques {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .techniques span {
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: #e7f6e8;
+      color: #24532b;
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    p {
+      margin: 0;
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.42;
+    }
+
+    .action {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--warning-border);
+      border-radius: 16px;
+      background: var(--warning);
+    }
+
+    .action strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #684f0c;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <main class="frame">
+    <div class="title">
+      <h1>Example triage</h1>
+      <span class="badge">schema validated</span>
+    </div>
+
+    <section class="flow" aria-label="Example network flow to triage output">
+      <article class="card">
+        <h2>Network flow</h2>
+        <div class="content input-grid">
+          <div class="kv"><span>proto</span><strong>tcp</strong></div>
+          <div class="kv"><span>service</span><strong>http</strong></div>
+          <div class="kv"><span>state</span><strong>FIN</strong></div>
+          <div class="kv"><span>duration</span><strong>0.27s</strong></div>
+          <div class="kv"><span>packets</span><strong>10 / 6</strong></div>
+          <div class="kv"><span>bytes</span><strong>856</strong></div>
+        </div>
+      </article>
+
+      <div class="arrow" aria-hidden="true"></div>
+
+      <article class="card">
+        <h2>Detection Analyst output</h2>
+        <div class="content">
+          <div class="classification">
+            Reconnaissance 66%
+            <small>also exploits 27%</small>
+          </div>
+
+          <div class="summary">
+            <div class="kv"><span>severity</span><strong>MEDIUM</strong></div>
+            <div class="kv"><span>assessment</span><strong>true positive</strong></div>
+            <div class="kv"><span>confidence</span><strong>0.55</strong></div>
+          </div>
+
+          <div class="techniques">
+            <span>T1595</span>
+            <span>T1046</span>
+            <span>T1190</span>
+          </div>
+
+          <p>
+            The HTTP flow is most consistent with reconnaissance, with an exploitation
+            hypothesis still plausible. Retrieved ATT&amp;CK context supports active
+            scanning, service discovery, and public-facing application probing.
+          </p>
+
+          <div class="action">
+            <strong>recommended action</strong>
+            <p>Review nearby HTTP requests, check for scan or exploit probes, and block
+            or rate-limit the source if corroborating activity appears.</p>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
