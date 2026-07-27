@@ -42,9 +42,9 @@
 
     <line class="arrow" x1="380" y1="274" x2="380" y2="304" marker-end="url(#arrowhead)" />
 
-    <rect class="stage-detect" x="118" y="316" width="524" height="44" rx="18" stroke-width="2" />
-    <text class="label box-title" x="380" y="343" text-anchor="middle">Two-stage detector</text>
-    <text class="label small" x="380" y="366" text-anchor="middle">produces ranked hypotheses, e.g. "reconnaissance 66%, exploits 27%"</text>
+    <rect class="stage-detect" x="118" y="306" width="524" height="66" rx="18" stroke-width="2" />
+    <text class="label box-title" x="380" y="334" text-anchor="middle">Two-stage detector</text>
+    <text class="label small" x="380" y="358" text-anchor="middle">produces ranked hypotheses, e.g. "reconnaissance 66%, exploits 27%"</text>
   </g>
 
   <line class="arrow" x1="380" y1="386" x2="380" y2="424" marker-end="url(#arrowhead)" />
