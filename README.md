@@ -3,6 +3,8 @@
 A network intrusion alert triage system that detects attacks in flow telemetry and
 explains them in analyst-facing language, grounded in MITRE ATT&CK.
 
+![Architecture](docs/architecture.svg)
+
 The project was built as a sequence of measured experiments. Several of them
 produced negative results, and those are reported here alongside the positive
 ones — the evaluation harness exists precisely so that claims about this system

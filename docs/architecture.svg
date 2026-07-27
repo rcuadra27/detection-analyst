@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="1120" viewBox="0 0 760 1120" role="img" aria-labelledby="title desc">
+  <title id="title">Detection Analyst Architecture</title>
+  <desc id="desc">Vertical pipeline diagram showing detect, ground, and explain stages for the Detection Analyst system.</desc>
+  <defs>
+    <style>
+      .label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      .title { font-size: 28px; font-weight: 750; fill: #e7edf7; }
+      .subtitle { font-size: 15px; fill: #c5d0e0; }
+      .stage-title { font-size: 16px; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; fill: #f1f5fb; }
+      .box-title { font-size: 18px; font-weight: 750; fill: #f7f9fd; }
+      .box-text { font-size: 14px; fill: #e2e8f3; }
+      .small { font-size: 13px; fill: #d5deeb; }
+      .legend { font-size: 13px; fill: #dce5f1; }
+      .arrow { stroke: #aebbd0; stroke-width: 3; stroke-linecap: round; fill: none; }
+      .stage-detect { fill: #244a73; stroke: #6fb7ff; }
+      .stage-ground { fill: #375c39; stroke: #8edb84; }
+      .stage-explain { fill: #6a3d70; stroke: #d58bea; }
+      .panel { fill: #182235; stroke: #43506a; }
+      .canvas { fill: #111827; }
+    </style>
+    <marker id="arrowhead" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#aebbd0" />
+    </marker>
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="116%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#05070d" flood-opacity="0.28" />
+    </filter>
+  </defs>
+
+  <rect class="canvas" x="0" y="0" width="760" height="1120" rx="28" />
+
+  <text class="label title" x="380" y="58" text-anchor="middle">Detection Analyst Pipeline</text>
+  <text class="label subtitle" x="380" y="86" text-anchor="middle">Flow telemetry to grounded, schema-validated analyst triage</text>
+
+  <g filter="url(#shadow)">
+    <rect class="panel" x="54" y="116" width="652" height="264" rx="24" opacity="0.92" />
+    <rect class="stage-detect" x="82" y="142" width="142" height="34" rx="17" />
+    <text class="label stage-title" x="153" y="164" text-anchor="middle">Detect</text>
+
+    <rect class="stage-detect" x="118" y="200" width="524" height="66" rx="18" stroke-width="2" />
+    <text class="label box-title" x="380" y="228" text-anchor="middle">Network flow</text>
+    <text class="label box-text" x="380" y="252" text-anchor="middle">input: protocol, bytes, rate, duration</text>
+
+    <line class="arrow" x1="380" y1="274" x2="380" y2="304" marker-end="url(#arrowhead)" />
+
+    <rect class="stage-detect" x="118" y="316" width="524" height="44" rx="18" stroke-width="2" />
+    <text class="label box-title" x="380" y="343" text-anchor="middle">Two-stage detector</text>
+    <text class="label small" x="380" y="366" text-anchor="middle">produces ranked hypotheses, e.g. "reconnaissance 66%, exploits 27%"</text>
+  </g>
+
+  <line class="arrow" x1="380" y1="386" x2="380" y2="424" marker-end="url(#arrowhead)" />
+
+  <g filter="url(#shadow)">
+    <rect class="panel" x="54" y="426" width="652" height="286" rx="24" opacity="0.92" />
+    <rect class="stage-ground" x="82" y="452" width="142" height="34" rx="17" />
+    <text class="label stage-title" x="153" y="474" text-anchor="middle">Ground</text>
+
+    <rect class="stage-ground" x="118" y="510" width="524" height="76" rx="18" stroke-width="2" />
+    <text class="label box-title" x="380" y="538" text-anchor="middle">ATT&amp;CK mapping</text>
+    <text class="label box-text" x="380" y="562" text-anchor="middle">classifier attack class to technique IDs</text>
+    <text class="label small" x="380" y="582" text-anchor="middle">hand-authored deterministic lookup, not similarity search</text>
+
+    <line class="arrow" x1="380" y1="594" x2="380" y2="624" marker-end="url(#arrowhead)" />
+
+    <rect class="stage-ground" x="118" y="636" width="524" height="56" rx="18" stroke-width="2" />
+    <text class="label box-title" x="380" y="662" text-anchor="middle">Retrieve docs by ID</text>
+    <text class="label box-text" x="380" y="684" text-anchor="middle">ATT&amp;CK corpus: 697 techniques / 1,034 chunks</text>
+  </g>
+
+  <line class="arrow" x1="380" y1="718" x2="380" y2="756" marker-end="url(#arrowhead)" />
+
+  <g filter="url(#shadow)">
+    <rect class="panel" x="54" y="758" width="652" height="274" rx="24" opacity="0.92" />
+    <rect class="stage-explain" x="82" y="784" width="142" height="34" rx="17" />
+    <text class="label stage-title" x="153" y="806" text-anchor="middle">Explain</text>
+
+    <rect class="stage-explain" x="118" y="842" width="524" height="58" rx="18" stroke-width="2" />
+    <text class="label box-title" x="380" y="868" text-anchor="middle">Grounded LLM</text>
+    <text class="label box-text" x="380" y="890" text-anchor="middle">writes the triage; faithfulness 1.00</text>
+
+    <line class="arrow" x1="380" y1="908" x2="380" y2="938" marker-end="url(#arrowhead)" />
+
+    <rect class="stage-explain" x="118" y="950" width="524" height="58" rx="18" stroke-width="2" />
+    <text class="label box-title" x="380" y="976" text-anchor="middle">Triage output</text>
+    <text class="label box-text" x="380" y="998" text-anchor="middle">severity, assessment, technique, explanation, action; schema-validated</text>
+  </g>
+
+  <g>
+    <rect x="84" y="1054" width="592" height="38" rx="19" fill="#182235" stroke="#43506a" />
+    <circle cx="112" cy="1073" r="7" fill="#244a73" stroke="#6fb7ff" stroke-width="2" />
+    <text class="label legend" x="126" y="1078">detect (trained classifier)</text>
+    <circle cx="318" cy="1073" r="7" fill="#375c39" stroke="#8edb84" stroke-width="2" />
+    <text class="label legend" x="332" y="1078">ground (deterministic lookup)</text>
+    <circle cx="552" cy="1073" r="7" fill="#6a3d70" stroke="#d58bea" stroke-width="2" />
+    <text class="label legend" x="566" y="1078">explain (RAG + LLM)</text>
+  </g>
+</svg>
