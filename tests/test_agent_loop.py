@@ -135,3 +135,19 @@ def test_skill_file_access_is_confined_to_the_skill_folder():
     skills = skill_lib.discover()
     assert "error" in skill_lib.load(skills, "investigate-event", "../../../src/agent/tools.py")
     assert "error" in skill_lib.load(skills, "no-such-skill")
+
+
+def test_progress_events_stream_during_the_turn():
+    events = []
+
+    async def go():
+        async with connect_mcp("t-events") as mcp:
+            agent = Agent(mcp, ScriptedLLM(WORM_INVESTIGATION), model="scripted",
+                          on_event=lambda kind, detail: events.append((kind, detail)))
+            await agent.setup()
+            await agent.ask("Is 10.0.3.57 a worm or a backdoor?")
+    run(go())
+    kinds = [k for k, _ in events]
+    assert kinds.count("thinking") == 9 and kinds.count("tool") == 9
+    assert kinds.count("tool_error") == 1          # the rejected first submission
+    assert events[0] == ("thinking", "step 1")

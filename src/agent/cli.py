@@ -85,7 +85,12 @@ async def connect_mcp(session_id: str):
     with open(LOG_DIR / "mcp_server.log", "a") as errlog:
         async with stdio_client(params, errlog=errlog) as (read, write):
             async with ClientSession(read, write) as session:
-                await session.initialize()
+                try:
+                    await asyncio.wait_for(session.initialize(), timeout=30)
+                except asyncio.TimeoutError:
+                    raise SystemExit(
+                        "The MCP tools server did not respond within 30s. "
+                        f"Check {LOG_DIR / 'mcp_server.log'} for its error output.")
                 yield session
 
 
@@ -99,7 +104,8 @@ def _block_to_dict(b) -> dict:
 
 class Agent:
     def __init__(self, mcp_session, llm, model: str = DEFAULT_MODEL,
-                 max_steps: int = MAX_STEPS, session_id: str | None = None):
+                 max_steps: int = MAX_STEPS, session_id: str | None = None,
+                 on_event=None):
         self.mcp = mcp_session
         self.llm = llm                      # AsyncAnthropic, or a test double
         self.model = model
@@ -109,6 +115,7 @@ class Agent:
         self.messages: list[dict] = []
         self.tools: list[dict] = []
         self.system = ""
+        self.on_event = on_event or (lambda kind, detail: None)   # live progress hook
 
     async def setup(self) -> None:
         listed = await self.mcp.list_tools()
@@ -156,6 +163,7 @@ class Agent:
         self.messages.append({"role": "user", "content": user_text})
 
         for step in range(self.max_steps):
+            self.on_event("thinking", f"step {step + 1}")
             resp = await self._create()
             turn.steps = step + 1
             turn.usage["input_tokens"] += resp.usage.input_tokens
@@ -168,7 +176,10 @@ class Agent:
                 break
             results = []
             for tu in tool_uses:
+                self.on_event("tool", f"{tu.name}({json.dumps(tu.input)[:100]})")
                 text, is_error = await self._run_tool(tu.name, dict(tu.input or {}))
+                if is_error:
+                    self.on_event("tool_error", text[:160])
                 turn.tool_calls.append({"name": tu.name, "input": tu.input,
                                         "is_error": is_error, "result": text})
                 results.append({"type": "tool_result", "tool_use_id": tu.id,
@@ -204,12 +215,22 @@ async def _main(args) -> None:
     from anthropic import AsyncAnthropic
 
     session_id = uuid.uuid4().hex[:12]
+
+    def show(kind: str, detail: str) -> None:
+        if not args.verbose:
+            return
+        prefix = {"thinking": "  … thinking", "tool": "  ·", "tool_error": "    ! rejected:"}[kind]
+        print(f"{prefix} {detail}", flush=True)
+
+    print("Starting tools server ...", flush=True)
     async with connect_mcp(session_id) as mcp_session:
-        agent = Agent(mcp_session, AsyncAnthropic(), model=args.model,
-                      max_steps=args.max_steps, session_id=session_id)
+        agent = Agent(mcp_session, AsyncAnthropic(timeout=120.0, max_retries=2),
+                      model=args.model, max_steps=args.max_steps, session_id=session_id,
+                      on_event=show)
         await agent.setup()
         questions = [args.ask] if args.ask else None
-        print(f"Detection Analyst agent · model {args.model} · session {session_id}")
+        print(f"Detection Analyst agent · model {args.model} · session {session_id} · "
+              f"{len(agent.tools)} tools, {len(agent.skills)} skills", flush=True)
         while True:
             if questions is not None:
                 if not questions:
@@ -226,10 +247,6 @@ async def _main(args) -> None:
                 if not q:
                     continue
             turn = await agent.ask(q)
-            if args.verbose:
-                for c in turn.tool_calls:
-                    flag = " (error)" if c["is_error"] else ""
-                    print(f"  · {c['name']}({json.dumps(c['input'])[:100]}){flag}")
             print(f"\n{turn.answer}")
             print(f"\n[{turn.steps} steps, {len(turn.tool_calls)} tool calls, "
                   f"{turn.usage['input_tokens']} in / {turn.usage['output_tokens']} out tokens]")
