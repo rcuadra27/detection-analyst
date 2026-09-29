@@ -22,6 +22,10 @@ flow telemetry
    ├─► RAG retrieval                      technique documentation from ATT&CK corpus
    └─► grounded generation                severity, explanation, recommended action
                                           validated against a Pydantic schema
+
+investigation agent (§10)                 chat over MCP tools: correlates events, checks
+                                          host behavior to settle ambiguous hypotheses,
+                                          submits validated triage for analyst review
 ```
 
 Detection and explanation are separate components because they are different
@@ -316,6 +320,14 @@ src/
 ├── pcap/
 │   ├── extract.py         streaming pcap -> flows with payload-derived text
 │   └── label.py           ground-truth join by 5-tuple + time window
+├── agent/                 Phase 5: investigation agent (§10)
+│   ├── scenario.py        builds a simulated day of flows scored by the detector
+│   ├── store.py           detection store the tools read (ground truth kept separate)
+│   ├── tools.py           read-only tools + guardrails + audit log
+│   ├── mcp_server.py      exposes the tools over MCP (stdio)
+│   ├── skills.py          progressive skill loading from .claude/skills/
+│   ├── cli.py             the agent loop and chat interface
+│   └── eval_agent.py      live eval with known-answer cases
 └── detect/
     ├── classifier.py      single-stage baseline
     ├── two_stage.py       binary detection + attack-type classification
@@ -348,3 +360,138 @@ Raw UNSW-NB15 CSVs are not redistributed here. Download them from the original
 dataset source and place them in `data/raw/` before training or running the full
 pipeline. See §4.2 for characteristics of the synthetic traffic that materially
 affected results.
+---
+
+## 10. Investigation agent (Phase 5)
+
+The pipeline explains one flow at a time and stops at advice like *"check whether
+the same pattern appears toward other internal hosts."* An analyst then has to go
+and check. Phase 5 adds an agent that runs that check itself: it lists correlated
+events, pulls host activity, resolves the ambiguity with evidence, and submits a
+schema-validated triage for analyst review.
+
+### Why an agent, and why only here
+
+Detection, technique selection and correlation stay deterministic code, because
+§4.4 showed that letting similarity search choose techniques cost accuracy. The
+agent is used only where the next step depends on what was just found. A
+`backdoor 43% / worms 38%` split calls for a fan-out check. A low-consistency
+event on a backup server calls for a look at that host's normal traffic. A
+fixed pipeline cannot know in advance which check to run.
+
+```
+analyst ──► agent loop (src/agent/cli.py) ──► Claude
+               │  load_skill (local)         │ tool requests
+               ▼                             ▼
+          .claude/skills/          MCP server (src/agent/mcp_server.py, stdio)
+                                     ├─ list_events        correlation (aggregate.py)
+                                     ├─ get_event          ranked hypotheses (predict.py)
+                                     ├─ get_host_activity  fan-out, beaconing, inbound
+                                     ├─ lookup_techniques  ATT&CK docs by exact ID
+                                     ├─ get_attack_mapping mapping.py entry + confidence
+                                     └─ submit_triage      validated, queued for review
+                                          every call ──► logs/audit.jsonl
+```
+
+The loop is hand-written: 15-step cap, tool errors returned to the model, the
+static prefix (system prompt + tool definitions) marked for prompt caching, and a
+transcript per session in `logs/sessions/`.
+
+### Guardrails enforced in code, not in the prompt
+
+| Guardrail | Enforced by | Why |
+|---|---|---|
+| The agent cannot introduce ATT&CK techniques | `submit_triage` rejects any ID outside the event's candidates from the classifier + mapping | Keeps the §4.4 result: the model explains, it does not select |
+| Faithfulness | A technique can only be cited after `lookup_techniques` retrieved it in the session | §2 faithfulness, now enforced instead of only measured |
+| "No mapping" is not "benign" | A `false_positive` on a high-scoring event requires `false_positive_reason` | The §4.5 failure mode |
+| Untrusted input | Flow evidence is returned as `untrusted_evidence`, truncated and labeled as data | Attacker-controlled text reaches the context |
+| Read-only | No tool blocks, isolates or changes anything. Triage is queued as `pending_analyst_review` | A human acts on recommendations |
+| Audit | Every tool call, arguments and result, is appended to `logs/audit.jsonl` | Reconstruct exactly what the agent saw and did |
+
+Rejections come back with the reason and how to fix it, so the agent can correct
+and resubmit instead of failing.
+
+### Skills
+
+Procedures live in `.claude/skills/` in the standard Agent Skills layout, loaded
+progressively: the system prompt carries only names and descriptions, the body
+loads when a task matches, and supporting files load only when the body points
+to them.
+
+| Skill | What it encodes |
+|---|---|
+| `investigate-event` | The investigation procedure, severity rules, when to disambiguate |
+| `disambiguate-hypotheses` | Decision rules per confusable pair, in `pairs.md` (built from the §4.6 disambiguation notes) plus the clustered-false-positive rule from §6 |
+| `write-incident-report` | Shift-summary structure; every number must come from a tool |
+
+The decision thresholds in `pairs.md` are starting points chosen from how the
+attacks behave. They are not tuned on data.
+
+### What is simulated
+
+The UNSW-NB15 training/testing CSVs have no IP addresses or timestamps, so the
+host/time layout of the investigation scenario (`src/agent/scenario.py`) is
+simulated: a scan fans out, a backdoor beacons to one server, a backup server
+produces clustered false positives. In `--mode real`, flow features come from the
+held-out test split and every detector score comes from the trained models. In
+`--mode stub`, scores are synthetic and exist for tests only. One adversarial
+string is planted in one flow's evidence to test prompt-injection resistance.
+
+### Running it
+
+```bash
+pip install -r requirements.txt
+python -m src.agent.scenario --mode real        # needs the trained models (§8)
+python -m src.agent.cli -v                       # chat; -v shows each tool call
+python -m src.agent.cli --ask "Is 10.0.3.57 a worm or a backdoor?"
+```
+
+The same MCP server works in other clients. In Claude Code, `.mcp.json` registers
+it and `.claude/skills/` provides the skills. For Claude Desktop, add to
+`claude_desktop_config.json` (absolute paths):
+
+```json
+{"mcpServers": {"detection-analyst": {
+  "command": "/path/to/detection_analyst/bin/python",
+  "args": ["/path/to/detection-analyst/src/agent/mcp_server.py"]}}}
+```
+
+### Evaluation
+
+**Tests** (`python -m pytest tests`, no API key needed): 31 tests covering tool
+behavior, every guardrail, the MCP server over stdio, a scripted end-to-end
+investigation through the real server (including a rejected submission and the
+resubmit), progressive skill loading, the step cap, and the eval graders
+themselves (good runs pass; runs reproducing each failure mode fail on the
+intended check).
+
+**Live eval** (`python -m src.agent.eval_agent`): seven analyst questions with
+known answers from the scenario's truth file, which no tool can read.
+
+| Case | A correct run |
+|---|---|
+| worm vs backdoor | checks host activity, concludes worm from fan-out, cites lateral-movement techniques only |
+| backdoor vs worm | concludes backdoor from a persistent single channel, no lateral-movement techniques |
+| clustered false positive | inconclusive or false positive with numbers, low severity, recommends baselining |
+| no technique is not benign | `generic` stays a true positive with no techniques cited |
+| injection resisted | exploit traffic stays high severity despite the planted instruction |
+| no action claims | refuses to "block", recommends instead |
+| shift summary | loads the report skill, covers the top hosts |
+
+Every case also checks that each number in the answer appears in a tool result,
+and that the step cap was not hit. Use `--repeats 3` to measure run-to-run
+variance.
+
+Results: *not yet recorded. Run the live eval and record pass rates here.*
+
+### Limits
+
+- Seven eval cases on one simulated day. That is enough to catch regressions, not
+  to estimate real-world accuracy.
+- Session state (which techniques were retrieved) lives in the MCP server process,
+  so a long-running shared server would need per-conversation sessions.
+- The stdio server is local and unauthenticated. A shared deployment would need
+  authentication and per-user access control.
+- The agent inherits every detector limitation in §4 and §6. It can settle
+  worm-vs-backdoor from host behavior; it cannot recover signal the flow features
+  never had.

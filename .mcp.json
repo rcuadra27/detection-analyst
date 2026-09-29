@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "detection-analyst": {
+      "command": "python",
+      "args": ["-m", "src.agent.mcp_server"]
+    }
+  }
+}

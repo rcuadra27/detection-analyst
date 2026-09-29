@@ -9,3 +9,8 @@ data/raw/
 data/processed/*
 !data/processed/*.json
 !data/processed/eval_set*.jsonl
+
+# agent layer: generated scenario, audit logs, transcripts, eval runs
+data/scenario/
+logs/
+.pytest_cache/
