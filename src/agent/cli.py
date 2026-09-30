@@ -36,6 +36,7 @@ LOG_DIR = Path(os.environ.get("DA_LOG_DIR", REPO_ROOT / "logs"))
 SESSIONS_DIR = LOG_DIR / "sessions"
 DEFAULT_MODEL = os.environ.get("DA_MODEL", "claude-sonnet-5")
 MAX_STEPS = 15
+MAX_OUTPUT_TOKENS = 4096
 MAX_TOOL_RESULT_CHARS = 20000
 
 SYSTEM_PROMPT = """You are the investigation agent for Detection Analyst, assisting a SOC \
@@ -69,6 +70,8 @@ class AgentTurn:
     tool_calls: list[dict] = field(default_factory=list)
     steps: int = 0
     hit_step_cap: bool = False
+    stop_reasons: list[str] = field(default_factory=list)
+    recoveries: list[str] = field(default_factory=list)   # empty or truncated responses handled
     usage: dict = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0})
 
 
@@ -149,8 +152,8 @@ class Agent:
             text = text[:MAX_TOOL_RESULT_CHARS] + "\n[result truncated by harness]"
         return text, is_error
 
-    async def _create(self, use_tools: bool = True):
-        kwargs = dict(model=self.model, max_tokens=2000,
+    async def _create(self, use_tools: bool = True, max_tokens: int = MAX_OUTPUT_TOKENS):
+        kwargs = dict(model=self.model, max_tokens=max_tokens,
                       system=[{"type": "text", "text": self.system,
                                "cache_control": {"type": "ephemeral"}}],
                       messages=self.messages)
@@ -164,27 +167,38 @@ class Agent:
 
         for step in range(self.max_steps):
             self.on_event("thinking", f"step {step + 1}")
-            resp = await self._create()
+            resp = await self._llm_step(turn)
             turn.steps = step + 1
-            turn.usage["input_tokens"] += resp.usage.input_tokens
-            turn.usage["output_tokens"] += resp.usage.output_tokens
-            self.messages.append({"role": "assistant",
-                                  "content": [_block_to_dict(b) for b in resp.content]})
             tool_uses = [b for b in resp.content if b.type == "tool_use"]
-            if resp.stop_reason != "tool_use" or not tool_uses:
-                turn.answer = "".join(b.text for b in resp.content if b.type == "text").strip()
-                break
-            results = []
-            for tu in tool_uses:
-                self.on_event("tool", f"{tu.name}({json.dumps(tu.input)[:100]})")
-                text, is_error = await self._run_tool(tu.name, dict(tu.input or {}))
-                if is_error:
-                    self.on_event("tool_error", text[:160])
-                turn.tool_calls.append({"name": tu.name, "input": tu.input,
-                                        "is_error": is_error, "result": text})
-                results.append({"type": "tool_result", "tool_use_id": tu.id,
-                                "content": text, "is_error": is_error})
-            self.messages.append({"role": "user", "content": results})
+
+            if resp.stop_reason == "tool_use" and tool_uses:
+                self.messages.append({"role": "assistant",
+                                      "content": [_block_to_dict(b) for b in resp.content]})
+                results = []
+                for tu in tool_uses:
+                    self.on_event("tool", f"{tu.name}({json.dumps(tu.input)[:100]})")
+                    text, is_error = await self._run_tool(tu.name, dict(tu.input or {}))
+                    if is_error:
+                        self.on_event("tool_error", text[:160])
+                    turn.tool_calls.append({"name": tu.name, "input": tu.input,
+                                            "is_error": is_error, "result": text})
+                    results.append({"type": "tool_result", "tool_use_id": tu.id,
+                                    "content": text, "is_error": is_error})
+                self.messages.append({"role": "user", "content": results})
+                continue
+
+            # A final response. Drop any tool call it contains: without stop_reason
+            # "tool_use" it was cut off, and an unanswered tool call would make the
+            # next request in this conversation invalid.
+            kept = [_block_to_dict(b) for b in resp.content if b.type != "tool_use"
+                    and not (b.type == "text" and not b.text.strip())]
+            answer = "".join(b.text for b in resp.content if b.type == "text").strip()
+            if kept:
+                self.messages.append({"role": "assistant", "content": kept})
+            if not answer:
+                answer = await self._recover_empty_answer(turn, resp.stop_reason)
+            turn.answer = answer
+            break
         else:
             # Step budget exhausted: one final call with no tools, answer from what we have.
             turn.hit_step_cap = True
@@ -192,14 +206,47 @@ class Agent:
                                   "Step limit reached. Answer now from the tool results above, "
                                   "and say what you could not finish."})
             resp = await self._create(use_tools=False)
-            turn.usage["input_tokens"] += resp.usage.input_tokens
-            turn.usage["output_tokens"] += resp.usage.output_tokens
+            self._count(turn, resp)
             turn.answer = "".join(b.text for b in resp.content if b.type == "text").strip()
-            self.messages.append({"role": "assistant",
-                                  "content": [_block_to_dict(b) for b in resp.content]})
+            if turn.answer:
+                self.messages.append({"role": "assistant",
+                                      "content": [{"type": "text", "text": turn.answer}]})
 
         self._save_transcript(user_text, turn)
         return turn
+
+    @staticmethod
+    def _count(turn: AgentTurn, resp) -> None:
+        turn.usage["input_tokens"] += resp.usage.input_tokens
+        turn.usage["output_tokens"] += resp.usage.output_tokens
+        turn.stop_reasons.append(resp.stop_reason)
+
+    async def _llm_step(self, turn: AgentTurn):
+        """One model call. If it hits the output limit, retry once with double the budget."""
+        resp = await self._create()
+        self._count(turn, resp)
+        if resp.stop_reason == "max_tokens":
+            turn.recoveries.append("max_tokens: retried with a larger output budget")
+            self.on_event("retry", "hit the output limit, retrying with a larger budget")
+            resp = await self._create(max_tokens=MAX_OUTPUT_TOKENS * 2)
+            self._count(turn, resp)
+        return resp
+
+    async def _recover_empty_answer(self, turn: AgentTurn, stop_reason: str) -> str:
+        """The model ended its turn without writing an answer. Ask once, without tools."""
+        turn.recoveries.append(f"empty answer (stop_reason={stop_reason}): asked for a final answer")
+        self.on_event("retry", "no written answer, asking for one")
+        # Consecutive user turns are merged by the API, so this follows tool results safely.
+        self.messages.append({"role": "user", "content":
+                              "You ended without a written answer. Write your final answer to "
+                              "the analyst now, using only the tool results above."})
+        resp = await self._create(use_tools=False, max_tokens=MAX_OUTPUT_TOKENS * 2)
+        self._count(turn, resp)
+        answer = "".join(b.text for b in resp.content if b.type == "text").strip()
+        if answer:
+            self.messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+            return answer
+        return "(The model returned no written answer. See the tool calls above and the transcript.)"
 
     def _save_transcript(self, question: str, turn: AgentTurn) -> None:
         SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -208,6 +255,8 @@ class Agent:
                                  "model": self.model, "question": question,
                                  "answer": turn.answer, "steps": turn.steps,
                                  "hit_step_cap": turn.hit_step_cap, "usage": turn.usage,
+                                 "stop_reasons": turn.stop_reasons,
+                                 "recoveries": turn.recoveries,
                                  "tool_calls": turn.tool_calls}, default=str) + "\n")
 
 
@@ -219,7 +268,8 @@ async def _main(args) -> None:
     def show(kind: str, detail: str) -> None:
         if not args.verbose:
             return
-        prefix = {"thinking": "  … thinking", "tool": "  ·", "tool_error": "    ! rejected:"}[kind]
+        prefix = {"thinking": "  … thinking", "tool": "  ·", "tool_error": "    ! rejected:",
+                  "retry": "  ↻"}[kind]
         print(f"{prefix} {detail}", flush=True)
 
     print("Starting tools server ...", flush=True)

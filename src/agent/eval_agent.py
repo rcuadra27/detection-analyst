@@ -158,6 +158,7 @@ def grade(case: dict, turn: AgentTurn) -> dict:
     return {"id": case["id"], "passed": all(v[0] for v in checks.values()),
             "checks": {k: {"ok": v[0], "detail": v[1]} for k, v in checks.items()},
             "soft": soft, "steps": turn.steps, "tool_calls": called,
+            "stop_reasons": turn.stop_reasons, "recoveries": turn.recoveries,
             "usage": turn.usage, "answer": ans}
 
 
@@ -200,6 +201,9 @@ async def main_async(args) -> int:
         flagged = sum(all(r["soft"].values()) for r in soft)
         print(f"\nInjection attempt flagged to the analyst in {flagged}/{len(soft)} runs "
               "(informational, not pass/fail)")
+    recovered = [r["id"] for r in results if r["recoveries"]]
+    if recovered:
+        print(f"Harness recoveries (empty or truncated responses) in: {', '.join(recovered)}")
     tokens_in = sum(r["usage"]["input_tokens"] for r in results)
     tokens_out = sum(r["usage"]["output_tokens"] for r in results)
     print(f"Tokens: {tokens_in:,} in / {tokens_out:,} out")

@@ -39,7 +39,10 @@ class ScriptedLLM:
     async def _create(self, **kw):
         self.requests.append(json.loads(json.dumps(kw, default=str)))
         content = self.turns.pop(0)
-        stop = "tool_use" if any(b.type == "tool_use" for b in content) else "end_turn"
+        if isinstance(content, tuple):                 # (blocks, explicit stop_reason)
+            content, stop = content
+        else:
+            stop = "tool_use" if any(b.type == "tool_use" for b in content) else "end_turn"
         return NS(content=content, stop_reason=stop,
                   usage=NS(input_tokens=100, output_tokens=20))
 
@@ -151,3 +154,36 @@ def test_progress_events_stream_during_the_turn():
     assert kinds.count("thinking") == 9 and kinds.count("tool") == 9
     assert kinds.count("tool_error") == 1          # the rejected first submission
     assert events[0] == ("thinking", "step 1")
+
+
+def test_empty_final_answer_is_recovered():
+    # The live-eval failure: after tool results the model ends its turn with no text.
+    turns = [[tool(1, "list_events", limit=1)], [], [text("Recovered answer.")]]
+    agent, llm, turn = run(_investigate(turns))
+    assert turn.answer == "Recovered answer."
+    assert turn.recoveries and "empty answer" in turn.recoveries[0]
+    assert "tools" not in llm.requests[-1]                     # recovery call offers no tools
+
+
+def test_output_limit_retries_with_a_larger_budget():
+    cut = ([text("Partial"), tool(1, "list_events", limit=1)], "max_tokens")
+    turns = [cut, [tool(2, "list_events", limit=1)], [text("Done.")]]
+    agent, llm, turn = run(_investigate(turns))
+    assert turn.answer == "Done."
+    assert llm.requests[1]["max_tokens"] == 2 * llm.requests[0]["max_tokens"]
+    assert "max_tokens" in turn.stop_reasons
+
+
+def test_truncated_tool_call_never_enters_the_conversation():
+    cut = ([text("Summary so far"), tool(9, "list_events", limit=1)], "max_tokens")
+    turns = [[tool(1, "list_events", limit=1)], cut, cut, [text("Final.")]]
+    agent, llm, turn = run(_investigate(turns))
+    assert turn.answer == "Summary so far"
+    for m in agent.messages:                                    # every tool_use has a result
+        if m["role"] == "assistant" and isinstance(m["content"], list):
+            ids = [b["id"] for b in m["content"] if b["type"] == "tool_use"]
+            if ids:
+                nxt = agent.messages[agent.messages.index(m) + 1]["content"]
+                assert ids == [r["tool_use_id"] for r in nxt]
+    assert all(not (b.get("type") == "tool_use" and b.get("id") == "call_9")
+               for m in agent.messages if isinstance(m["content"], list) for b in m["content"])
