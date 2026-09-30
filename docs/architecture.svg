@@ -29,7 +29,7 @@
   <rect class="canvas" x="0" y="0" width="760" height="1120" rx="28" />
 
   <text class="label title" x="380" y="58" text-anchor="middle">Detection Analyst Pipeline</text>
-  <text class="label subtitle" x="380" y="86" text-anchor="middle">Flow telemetry to grounded, schema-validated analyst triage</text>
+  <text class="label subtitle" x="380" y="86" text-anchor="middle">Per-flow core: detect, ground by ID, explain. Agent is a second surface (§10).</text>
 
   <g filter="url(#shadow)">
     <rect class="panel" x="54" y="116" width="652" height="264" rx="24" opacity="0.92" />

@@ -5,6 +5,10 @@ explains them in analyst-facing language, grounded in MITRE ATT&CK.
 
 ![Architecture](docs/architecture.svg)
 
+*The diagram is the shared detect → ground → explain core (`src/pipeline.py`). The
+investigation agent (§10) sits on the same detector and mapping; it does not
+re-run the per-flow generator.*
+
 The project was built as a sequence of measured experiments. Several of them
 produced negative results, and those are reported here alongside the positive
 ones — the evaluation harness exists precisely so that claims about this system
@@ -14,25 +18,37 @@ rest on numbers rather than on demos.
 
 ## 1. What the system does
 
+Two surfaces share one detection and grounding stack. They are not one linear
+pipeline.
+
+**Core (per flow)** — `src/pipeline.py`:
+
 ```
 flow telemetry
-   ├─► [stage 1] binary detector          attack vs benign, tuned threshold
+   ├─► [stage 1] binary detector          attack vs benign, threshold 0.85
    ├─► [stage 2] attack-type classifier   ranked hypotheses + confidence
-   ├─► deterministic ATT&CK mapping       class -> technique IDs (hand-authored)
-   ├─► RAG retrieval                      technique documentation from ATT&CK corpus
-   └─► grounded generation                severity, explanation, recommended action
-                                          validated against a Pydantic schema
-
-investigation agent (§10)                 chat over MCP tools: correlates events, checks
-                                          host behavior to settle ambiguous hypotheses,
-                                          submits validated triage for analyst review
+   ├─► deterministic ATT&CK mapping       class -> technique IDs (mapping.py)
+   ├─► retrieve docs by ID                FAISS chunks for those IDs only
+   └─► grounded generation                Claude writes TriageResult JSON
+                                          (src/rag/generator.py)
 ```
 
-Detection and explanation are separate components because they are different
-problems. A supervised classifier learns attack structure from labels; a language
-model grounded in retrieved ATT&CK documentation writes the analyst-facing
-triage. An earlier architecture that used semantic retrieval for *detection* was
-measured, found insufficient, and replaced — see §4.
+**Investigation agent (a day of flows)** — `src/agent/cli.py`:
+
+```
+pre-scored scenario (data/scenario/)
+   ├─► correlate into (source, 5-min) events     aggregate.py
+   ├─► host activity to settle split hypotheses  get_host_activity
+   ├─► ATT&CK docs by exact ID                   lookup_techniques
+   │                                             (corpus, not generator.py)
+   └─► submit_triage                             schema + guardrails, queued
+```
+
+Detection and explanation are separate because they are different problems. A
+supervised classifier (`HistGradientBoostingClassifier`) learns attack structure
+from labels; technique IDs come from the hand-authored mapping, not from
+similarity search. Claude explains. An earlier architecture that used semantic
+retrieval for *detection* was measured, found insufficient, and replaced — see §4.
 
 ---
 
@@ -304,36 +320,43 @@ src/
 ├── schema.py              Pydantic TriageResult contract
 ├── mapping.py             hand-authored class -> ATT&CK table (validated against corpus)
 ├── corpus.py              ATT&CK STIX download + technique extraction
+├── pipeline.py            per-flow path: detect -> map -> retrieve by ID -> generate
 ├── rag/
 │   ├── chunking.py        697 techniques -> 1,034 retrievable chunks
 │   ├── index.py           FAISS vector index (exact cosine search)
-│   └── generator.py       grounded generation, schema-validated, one corrective retry
-├── pipeline.py            end-to-end entry point: flow -> detect -> ground -> explain
+│   └── generator.py       used by pipeline.py only; schema-validated, one retry
+├── detect/
+│   ├── classifier.py      single-stage 10-class baseline
+│   ├── two_stage.py       trains stage1_binary.joblib + stage2_multiclass.joblib
+│   │                      (what pipeline.py, predict.py, and the agent load)
+│   ├── grouped.py         ATT&CK-tactic taxonomy + threshold sweep (metrics in §2)
+│   ├── predict.py         ranked hypotheses, confidence bands, disambiguation
+│   └── aggregate.py       correlation into (source, window) events
+├── agent/                 investigation agent (§10)
+│   ├── scenario.py        builds a simulated day; --mode real scores UNSW test rows
+│   ├── store.py           tools read data/scenario/flows.jsonl (not truth.json)
+│   ├── tools.py           read-only tools + guardrails + audit log
+│   ├── mcp_server.py      exposes the tools over MCP (stdio)
+│   ├── skills.py          progressive loading from .claude/skills/
+│   ├── cli.py             agent loop and chat interface
+│   └── eval_agent.py      live eval: 7 known-answer cases
 ├── eval/
 │   ├── dataset.py         labeled eval set from UNSW CSV
 │   ├── dataset_pcap.py    labeled eval set from payload-extracted flows
 │   ├── enrich.py          feature-to-language descriptors
 │   ├── retrieval.py       hit@k, recall@k, MRR
 │   ├── answer.py          severity / technique / faithfulness metrics
-│   ├── run_eval.py        harness for the retrieval-based architecture
+│   ├── diagnose_retrieval.py  per-class retrieval miss analysis
+│   ├── run_eval.py        harness for the old similarity-retrieval architecture
 │   └── run_eval_hybrid.py harness for the current hybrid pipeline
-├── pcap/
-│   ├── extract.py         streaming pcap -> flows with payload-derived text
-│   └── label.py           ground-truth join by 5-tuple + time window
-├── agent/                 Phase 5: investigation agent (§10)
-│   ├── scenario.py        builds a simulated day of flows scored by the detector
-│   ├── store.py           detection store the tools read (ground truth kept separate)
-│   ├── tools.py           read-only tools + guardrails + audit log
-│   ├── mcp_server.py      exposes the tools over MCP (stdio)
-│   ├── skills.py          progressive skill loading from .claude/skills/
-│   ├── cli.py             the agent loop and chat interface
-│   └── eval_agent.py      live eval with known-answer cases
-└── detect/
-    ├── classifier.py      single-stage baseline
-    ├── two_stage.py       binary detection + attack-type classification
-    ├── grouped.py         ATT&CK-tactic taxonomy + threshold sweep
-    ├── predict.py         ranked hypotheses, confidence bands, disambiguation
-    └── aggregate.py       correlation into scored events
+└── pcap/
+    ├── extract.py         streaming pcap -> flows with payload-derived text
+    └── label.py           ground-truth join by 5-tuple + time window
+
+.claude/skills/            investigate-event, disambiguate-hypotheses, write-incident-report
+tests/                     35 pytest tests (no API key)
+docs/                      architecture diagram + example triage visuals
+data/scenario/             pre-scored investigation day (flows.jsonl, meta.json, truth.json)
 ```
 
 ## 8. Setup
@@ -345,10 +368,15 @@ pip install -r requirements.txt
 cp .env.example .env          # add ANTHROPIC_API_KEY
 
 python -m src.corpus                    # download + validate ATT&CK corpus
-python -m src.rag.index                 # build FAISS index
+python -m src.rag.index                 # build FAISS index (needed by pipeline.py)
+python -m src.detect.two_stage --train --threshold 0.85
+# writes data/processed/stage1_binary.joblib and stage2_multiclass.joblib
 python -m src.detect.grouped --train --sweep --threshold 0.85
-python -m src.pipeline --demo --n 5      # see the system run
-python -m src.eval.run_eval_hybrid --per-class 8   # full evaluation
+# grouped taxonomy metrics in §2; writes grouped_stage*.joblib, not the runtime pair
+python -m src.pipeline --demo --n 5 --no-explain   # detection only
+python -m src.eval.run_eval_hybrid --per-class 8   # hybrid pipeline eval (API key)
+python -m src.agent.scenario --mode real           # build the investigation day
+python -m src.agent.cli -v                         # chat agent (§10)
 ```
 
 ## 9. Data
