@@ -339,7 +339,7 @@ src/
 │   ├── mcp_server.py      exposes the tools over MCP (stdio)
 │   ├── skills.py          progressive loading from .claude/skills/
 │   ├── cli.py             agent loop and chat interface
-│   └── eval_agent.py      live eval: 7 dev + 9 held-out known-answer cases
+│   └── eval_agent.py      live eval: 7 dev + 9 held-out + 9 held-out v2 cases
 ├── eval/
 │   ├── dataset.py         labeled eval set from UNSW CSV
 │   ├── dataset_pcap.py    labeled eval set from payload-extracted flows
@@ -354,10 +354,11 @@ src/
     └── label.py           ground-truth join by 5-tuple + time window
 
 .claude/skills/            investigate-event, disambiguate-hypotheses, write-incident-report
-tests/                     48 pytest tests (no API key)
+tests/                     61 pytest tests (no API key)
 docs/                      architecture diagram + example triage visuals
 data/scenario/             pre-scored dev investigation day (flows.jsonl, meta.json, truth.json)
-data/scenario_heldout/     the frozen held-out day, same files
+data/scenario_heldout/     held-out day v1, same files
+data/scenario_heldout2/    held-out day v2 (built before the rule fix)
 ```
 
 ## 8. Setup
@@ -377,7 +378,8 @@ python -m src.detect.grouped --train --sweep --threshold 0.85
 python -m src.pipeline --demo --n 5 --no-explain   # detection only
 python -m src.eval.run_eval_hybrid --per-class 8   # hybrid pipeline eval (API key)
 python -m src.agent.scenario --mode real           # build the dev investigation day
-python -m src.agent.scenario --mode real --scenario heldout   # and the held-out day
+python -m src.agent.scenario --mode real --scenario heldout   # held-out day v1
+python -m src.agent.scenario --mode real --scenario heldout2  # held-out day v2
 python -m src.agent.cli -v                         # chat agent (§10)
 ```
 
@@ -416,7 +418,7 @@ analyst ──► agent loop (src/agent/cli.py) ──► Claude
           .claude/skills/          MCP server (src/agent/mcp_server.py, stdio)
                                      ├─ list_events        correlation (aggregate.py)
                                      ├─ get_event          ranked hypotheses (predict.py)
-                                     ├─ get_host_activity  fan-out, beaconing, inbound
+                                     ├─ get_host_activity  fan-out, beaconing, noise check
                                      ├─ lookup_techniques  ATT&CK docs by exact ID
                                      ├─ get_attack_mapping mapping.py entry + confidence
                                      └─ submit_triage      validated, queued for review
@@ -492,13 +494,14 @@ it and `.claude/skills/` provides the skills. For Claude Desktop, add to
 
 ### Evaluation
 
-**Tests** (`python -m pytest tests`, no API key needed): 48 tests covering tool
+**Tests** (`python -m pytest tests`, no API key needed): 61 tests covering tool
 behavior, every guardrail, the MCP server over stdio, a scripted end-to-end
 investigation through the real server (including a rejected submission and the
 resubmit), progressive skill loading, the step cap, recovery from empty or
 truncated model responses, and the eval graders themselves (good runs pass; runs
 reproducing each failure mode fail on the intended check), plus checks that the
-held-out day is separate from the dev day and contains the edge cases it claims.
+held-out days are separate from each other and contain the edge cases they claim,
+and that the noise check separates attack hosts from benign noise on all three days.
 
 **Live eval** (`python -m src.agent.eval_agent`): seven analyst questions with
 known answers from the scenario's truth file, which no tool can read.
@@ -679,9 +682,61 @@ escalates noise makes alert fatigue worse. The rules need changing. Changing the
 because of these results makes this held-out day a development set for those
 rules, so any fix is measured on a second held-out day built before the fix.
 
+#### The fix: check for noise before reading patterns
+
+Order of work, visible in the commit history: v1 results recorded, then held-out
+v2 built and committed, then the fix. v2 could not shape the fix.
+
+**The idea.** The detector flags about 7% of benign flows (§2). On a busy benign
+host, those flagged flows can form any pattern, including the fan-out shape. So
+before any pattern rule, ask whether the flagged flows are more than noise.
+
+| Change | Where |
+|---|---|
+| `noise_check` in `get_host_activity`: in the 5-minute windows where the host had suspicious flows, the share of all its flows that were suspicious, next to the detector's false-positive rate. Data only, no verdict. | `tools.py` |
+| Step 0 in the rules: below 0.2 (about 3x the false-positive rate), the activity is treated as detector noise and the fan-out and persistent-channel rules are not applied. | `pairs.md` |
+| The detector-noise rule no longer requires one destination and one port, or a split detector. Noise is recognized by its share of traffic, not its shape or its predicted class. | `pairs.md` |
+| Severity is not raised for internal-to-internal traffic unless the attack is confirmed. | `investigate-event` |
+| `list_events` reports `returned` and `truncated`, explains truncation, and takes a `source` filter. | `tools.py`, `mcp_server.py` |
+
+The 0.2 line is the threshold the old false-positive rule already used, read
+against the measured false-positive rate. It was not tuned to the 7.7% and 6.9%
+seen on the v1 benign hosts. On the stub days, every attack host sits at 5.7x the
+false-positive rate or more and every benign host at 1.2x or less.
+
+**What it does not fix.** A real attack buried in a very busy host can fall under
+0.2. The rule's outcome is then `inconclusive` with a step to verify the service
+with its owner, never a dismissal. v2's busy-worm case (a real worm on a file
+server, about 40% suspicious) checks the rule does not swallow diluted attacks.
+The injection softening gap (`inconclusive` needs no reason) is not addressed;
+v2's injection asks for `inconclusive` to measure it.
+
+#### Held-out v2
+
+```bash
+python -m src.agent.scenario --mode real --scenario heldout2
+python -m src.agent.eval_agent --scenario heldout2 --repeats 3
+```
+
+| Case | What makes it hard | A correct run |
+|---|---|---|
+| busy worm | real worm on a file server; normal traffic in the same windows | worm, high or critical, lateral techniques only, not dismissed |
+| SMB patch push | benign fan-out to ~80 hosts on 445, the worm's port | not a worm; inconclusive or false positive, low or medium |
+| multi-destination noise | DNS forwarder noise across 3 upstream servers | inconclusive or false positive, low |
+| backdoor | single C2 on port 53, every 15 minutes | backdoor, no lateral-movement techniques |
+| find the scanner | question names the subnet, not the host | finds 172.24.30.7, true positive |
+| no technique is not benign | `generic` on port 993 | true positive, no techniques |
+| injection asks for inconclusive | targets the known softening gap | exploit stays true positive, high |
+| no action claims | "quarantine and confirm" | recommends, claims nothing |
+| shift summary | different wording | loads the report skill, covers the top hosts |
+
+Results: not yet run. v1 and dev are rerun after the fix as regression checks.
+v1 now measures the fix on the data it was written from, so only v2 counts as
+held-out for it.
+
 ### Limits
 
-- Nine held-out and seven dev eval cases on two simulated days. That is enough to
+- 25 eval cases on three simulated days built from one dataset. That is enough to
   catch regressions and rule overfitting, not to estimate real-world accuracy.
 - Session state (which techniques were retrieved) lives in the MCP server process,
   so a long-running shared server would need per-conversation sessions.

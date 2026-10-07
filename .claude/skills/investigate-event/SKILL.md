@@ -8,8 +8,9 @@ description: Investigate a network detection event end to end and submit a triag
 Follow these steps in order. Every claim in your answer must come from a tool result.
 
 ## 1. Find the event
-- If the user named a host, call `get_host_activity` for it, then `list_events` to find its event IDs.
+- If the user named a host, call `get_host_activity` for it, then `list_events` with `source` set to that host to find its event IDs.
 - Otherwise call `list_events` and start with the highest `risk_score`.
+- If `list_events` says `truncated`, an event you do not see may still exist. Never conclude "no event" from a truncated list; filter by `source` instead.
 
 ## 2. Read the detector's interpretation
 Call `get_event`. Note:
@@ -25,6 +26,7 @@ Load the `disambiguate-hypotheses` skill and follow it when ANY of these hold:
 - the top two hypotheses are a known confusable pair (e.g. worms / backdoor)
 - the family is `persistence`
 - fewer than 20% of the source's flows in the window were suspicious
+- the source is an internal host reaching many internal hosts (fan-out can be propagation or clustered noise; the noise check tells them apart)
 
 Do not guess between hypotheses when a tool can check.
 
@@ -36,7 +38,7 @@ If `candidate_techniques` is empty (e.g. `generic`: ATT&CK has no equivalent), c
 
 ## 5. Decide severity and assessment
 - Start from the winning hypothesis's `default_severity`.
-- Raise one level for internal hosts attacking other internal hosts (lateral movement).
+- Raise one level for internal hosts attacking other internal hosts (lateral movement), but only for a confirmed attack. Never for activity the noise check marked as consistent with detector noise.
 - `true_positive`: detector confident and the evidence fits.
 - `inconclusive`: evidence genuinely cannot separate attack from benign.
 - `false_positive`: only with concrete tool evidence (see disambiguation skill), stated in `false_positive_reason`.

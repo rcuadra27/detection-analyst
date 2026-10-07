@@ -10,11 +10,12 @@ Flow features alone cannot separate some attack classes (measured: backdoor 0.06
 ## Procedure
 1. Identify the pair or situation in `pairs.md` (load it with `load_skill("disambiguate-hypotheses", "pairs.md")`).
 2. Call `get_host_activity` for the event's source host.
-3. Apply the decision rule for that pair, using the exact fields named.
-4. State the rule outcome with its numbers, e.g. "reached 33 internal hosts on port 445 in 4 minutes, so propagation, so worm".
-5. If no rule fires, keep the split: report both hypotheses, cite techniques for both, and recommend the evidence that would settle it. Confidence at most 0.6.
+3. Run Step 0 in `pairs.md` first: is the flagged traffic more than detector noise? If not, follow the detector-noise rule and stop there.
+4. Otherwise apply the decision rule for that pair, using the exact fields named.
+5. State the rule outcome with its numbers, e.g. "61% of its flows in those windows were suspicious, it reached 33 internal hosts on port 445 in 4 minutes, so propagation, so worm".
+6. If no rule fires, keep the split: report both hypotheses, cite techniques for both, and recommend the evidence that would settle it. Confidence at most 0.6.
 
 ## Principles
 - A rule decides; you do not override it with intuition. If the evidence conflicts with the rule, report both and lower confidence.
 - The two hypotheses often need different responses. Say which response the evidence supports.
-- These thresholds are starting points, chosen from how the attacks behave. They are not tuned on any dataset. Say so if asked.
+- These thresholds are starting points, chosen from how the attacks behave and from the detector's measured false-positive rate. They are not tuned on any dataset. Say so if asked.

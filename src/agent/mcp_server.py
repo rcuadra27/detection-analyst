@@ -49,11 +49,14 @@ def session() -> InvestigationSession:
 
 
 @mcp.tool()
-def list_events(limit: int = 10, min_suspicious: int = 5) -> dict:
+def list_events(limit: int = 10, min_suspicious: int = 5, source: str | None = None) -> dict:
     """List correlated detection events (one source host, one 5-minute window), highest
     risk first. Start here when asked what happened or what to look at. min_suspicious
-    is the noise gate: a window needs this many suspicious flows to count as an event."""
-    return session().call("list_events", limit=limit, min_suspicious=min_suspicious)
+    is the noise gate: a window needs this many suspicious flows to count as an event.
+    At most 25 events are returned; check 'truncated'. Pass source='<host IP>' to list
+    only that host's events."""
+    return session().call("list_events", limit=limit, min_suspicious=min_suspicious,
+                          source=source)
 
 
 @mcp.tool()
@@ -70,7 +73,9 @@ def get_host_activity(host: str) -> dict:
     """Get a host's full-day activity: outbound suspicious flows, how many distinct internal
     and external hosts it reached, how concentrated it was on one destination, when it was
     active, and inbound suspicious flows. Use it to test hypotheses, e.g. fan-out to many
-    internal hosts (propagation) versus one persistent external channel (beaconing)."""
+    internal hosts (propagation) versus one persistent external channel (beaconing).
+    noise_check compares the host's suspicious share in its active windows with the
+    detector's false-positive rate, to tell attack traffic from clustered noise."""
     return session().call("get_host_activity", host=host)
 
 

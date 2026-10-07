@@ -45,6 +45,10 @@ CORPUS_CACHE = Path("data/raw/attack_techniques_cache.json")
 MAX_EVIDENCE_CHARS = 200
 MAX_DESCRIPTION_CHARS = 1500
 MAX_IDS_PER_LOOKUP = 8
+MAX_EVENTS_LISTED = 25
+# Stage-1 false-positive rate on held-out UNSW traffic at the 0.85 threshold (README
+# §2). A benign host flags roughly this share of its flows by chance.
+DETECTOR_FALSE_POSITIVE_RATE = 0.069
 
 
 def _clock(ts: float) -> str:
@@ -158,14 +162,27 @@ class InvestigationSession:
 
     # ---------- tools ----------
 
-    def list_events(self, limit: int = 10, min_suspicious: int = 5) -> dict:
+    def list_events(self, limit: int = 10, min_suspicious: int = 5,
+                    source: str | None = None) -> dict:
         """Correlated (source, 5-minute window) events, highest risk first."""
-        limit = max(1, min(int(limit), 25))
+        limit = max(1, min(int(limit), MAX_EVENTS_LISTED))
         events = self._correlate(min_suspicious=max(1, int(min_suspicious)))
-        return {
+        if source:
+            events = [e for e in events if e.source == source.strip()]
+        shown = events[:limit]
+        out = {
             "scenario": {k: self.store.meta.get(k) for k in ("detector", "layout", "threshold")},
             "total_events": len(events),
-            "events": [{
+            "returned": len(shown),
+            "truncated": len(events) > len(shown),
+        }
+        if source:
+            out["source_filter"] = source.strip()
+        if out["truncated"]:
+            out["note"] = (f"Only the top {len(shown)} of {len(events)} events by risk are "
+                           f"listed (max {MAX_EVENTS_LISTED}). An event missing here may "
+                           "still exist: pass source='<host>' to list one host's events.")
+        out["events"] = [{
                 "event_id": self._event_id(e),
                 "source": e.source,
                 "source_is_internal": is_internal(e.source),
@@ -177,8 +194,8 @@ class InvestigationSession:
                 "distinct_ports": e.distinct_ports,
                 "risk_score": e.risk_score,
                 "dominant_predicted_class": e.dominant_class,
-            } for e in events[:limit]],
-        }
+            } for e in shown]
+        return out
 
     def get_event(self, event_id: str) -> dict:
         """Detector interpretation and evidence for one event."""
@@ -245,6 +262,13 @@ class InvestigationSession:
         top_pair, top_n = pairs.most_common(1)[0] if pairs else (None, 0)
         windows = sorted({int(f.timestamp // 300) for f in sus})
         span = (sus[-1].timestamp - sus[0].timestamp) / 60 if len(sus) > 1 else 0.0
+        # Noise check: in the 5-minute windows where this host had suspicious flows,
+        # what share of everything it sent was suspicious? Benign traffic is flagged at
+        # about the detector's false-positive rate, so a share near that rate means the
+        # flagged flows are consistent with chance, whatever pattern they form.
+        active = set(windows)
+        in_active = [f for f in out_flows if int(f.timestamp // 300) in active]
+        frac_active = len(sus) / max(len(in_active), 1)
         return {
             "host": host,
             "host_is_internal": is_internal(host),
@@ -264,6 +288,18 @@ class InvestigationSession:
                 "top_pair_share_of_suspicious": round(top_n / max(len(sus), 1), 3),
                 "top_ports": [{"port": p, "flows": n}
                               for p, n in Counter(f.dest_port for f in sus).most_common(5)],
+            },
+            "noise_check": {
+                "flows_in_active_windows": len(in_active),
+                "suspicious_fraction_in_active_windows": round(frac_active, 3),
+                "detector_false_positive_rate": DETECTOR_FALSE_POSITIVE_RATE,
+                "times_false_positive_rate": round(frac_active / DETECTOR_FALSE_POSITIVE_RATE, 1),
+                "how_to_read": (
+                    "The detector flags about 7% of benign flows. If the host's suspicious "
+                    "share in its active windows is close to that, the flagged flows are "
+                    "consistent with detector noise, whatever pattern (fan-out, beaconing) "
+                    "they form. A share far above it means most of what the host sent "
+                    "in those windows looked like attack traffic."),
             },
             "inbound": {
                 "total_flows": len(in_flows),
