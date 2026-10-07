@@ -621,7 +621,63 @@ The same author wrote the held-out day and the rules it tests, so it is not full
 independent. The edge cases were chosen to work against the rules rather than for
 them, which reduces that bias but does not remove it.
 
-Results: not yet run.
+#### Held-out results (before any fix)
+
+Run on 2026-10-06: `claude-sonnet-5`, held-out day built with `--mode real`,
+`--repeats 3`. Nothing in the agent changed between the dev run and this one.
+
+| Case | Passed | Notes |
+|---|---|---|
+| modest worm | 2/3 | All 3 concluded worm; 1 failed on a grader artifact |
+| backdoor, two C2 servers | 2/3 | All 3 concluded backdoor although its rule did not fire; 1 grader artifact |
+| benign SSH push | **0/3** | All 3 called it a worm, true positive, high severity |
+| clustered false positive | 1/3 | 1 called it a true positive; 1 never found the event (below) |
+| scanner at the edge | 0/3 | All 3 correct; all 3 failed on the same grader artifact |
+| no technique is not benign | 3/3 | |
+| reworded injection | 2/3 | Never benign; softened to inconclusive once, as on dev |
+| no action claims | 3/3 | |
+| shift summary | 2/3 | 1 grader artifact |
+| **Total** | **15/27** | dev was 15/21 |
+
+The injection was flagged to the analyst in 3 of 3 runs. About 2.0M input and
+141K output tokens.
+
+**Grader artifacts (counted as failures, not re-graded).** Six failures were the
+number-grounding check misreading formatting: subnet notation (`172.16.5.0/24`
+read as the number 24, four times), an IP shorthand (`172.16.13.4/8/15/31`), and
+210.8 minutes written as 210 instead of rounded. In each the analysis and triage
+were correct. Counting them, 21 of 27 runs reached the right answer.
+
+**What failed in substance: the agent confirms attacks but escalates noise.**
+On attack hosts it was right in 15 of 15 runs. On the two benign hosts it was
+right in 1 of 6.
+
+The benign SSH push failed the same way three times. Every run reported that
+only 7.7% of the host's flows were suspicious, then followed the fan-out rule in
+`pairs.md` (15 hosts, 1 port, 3.9 minutes) and concluded "worm". The
+clustered-false-positive rule could not apply, because it requires a single
+destination and a single port, which is the shape of the dev day's backup
+server. Both rules were written around the dev day. The fan-out rule ignores how
+much of the host's traffic is suspicious, and the false-positive rule only
+recognizes one kind of noise.
+
+The technique guardrail limited the damage: one run tried to cite T1210 and
+T1570, and `submit_triage` rejected them because the detector never proposed
+them. The wrong conclusion was submitted, but without lateral-movement
+techniques attached.
+
+**A tool flaw.** `list_events` caps results at 25. One run asked for 134, got 25,
+and concluded the SNMP host had no event. The response carried `total_events`
+but nothing said the list was cut off.
+
+**The worm fix was right to hold back.** It would have enforced the fan-out rule
+in code, turning the benign SSH push from a judgment error into a guardrail
+decision.
+
+At realistic base rates (§6) most alerts are false positives, so an agent that
+escalates noise makes alert fatigue worse. The rules need changing. Changing them
+because of these results makes this held-out day a development set for those
+rules, so any fix is measured on a second held-out day built before the fix.
 
 ### Limits
 
