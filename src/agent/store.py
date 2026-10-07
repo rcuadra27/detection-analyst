@@ -25,6 +25,14 @@ FLOWS_PATH = SCENARIO_DIR / "flows.jsonl"
 META_PATH = SCENARIO_DIR / "meta.json"
 TRUTH_PATH = SCENARIO_DIR / "truth.json"
 
+# Where each named scenario is built. The tools always read SCENARIO_DIR, so to
+# point the MCP server at the held-out day, set DA_SCENARIO_DIR to its directory
+# (eval_agent.py and cli.py do this for you with --scenario heldout).
+SCENARIO_DIRS = {
+    "dev": SCENARIO_DIR,
+    "heldout": Path(os.environ.get("DA_HELDOUT_DIR", "data/scenario_heldout")),
+}
+
 
 @dataclass
 class FlowRecord:

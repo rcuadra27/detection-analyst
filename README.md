@@ -339,7 +339,7 @@ src/
 │   ├── mcp_server.py      exposes the tools over MCP (stdio)
 │   ├── skills.py          progressive loading from .claude/skills/
 │   ├── cli.py             agent loop and chat interface
-│   └── eval_agent.py      live eval: 7 known-answer cases
+│   └── eval_agent.py      live eval: 7 dev + 9 held-out known-answer cases
 ├── eval/
 │   ├── dataset.py         labeled eval set from UNSW CSV
 │   ├── dataset_pcap.py    labeled eval set from payload-extracted flows
@@ -354,9 +354,10 @@ src/
     └── label.py           ground-truth join by 5-tuple + time window
 
 .claude/skills/            investigate-event, disambiguate-hypotheses, write-incident-report
-tests/                     35 pytest tests (no API key)
+tests/                     48 pytest tests (no API key)
 docs/                      architecture diagram + example triage visuals
-data/scenario/             pre-scored investigation day (flows.jsonl, meta.json, truth.json)
+data/scenario/             pre-scored dev investigation day (flows.jsonl, meta.json, truth.json)
+data/scenario_heldout/     the frozen held-out day, same files
 ```
 
 ## 8. Setup
@@ -375,7 +376,8 @@ python -m src.detect.grouped --train --sweep --threshold 0.85
 # grouped taxonomy metrics in §2; writes grouped_stage*.joblib, not the runtime pair
 python -m src.pipeline --demo --n 5 --no-explain   # detection only
 python -m src.eval.run_eval_hybrid --per-class 8   # hybrid pipeline eval (API key)
-python -m src.agent.scenario --mode real           # build the investigation day
+python -m src.agent.scenario --mode real           # build the dev investigation day
+python -m src.agent.scenario --mode real --scenario heldout   # and the held-out day
 python -m src.agent.cli -v                         # chat agent (§10)
 ```
 
@@ -490,12 +492,13 @@ it and `.claude/skills/` provides the skills. For Claude Desktop, add to
 
 ### Evaluation
 
-**Tests** (`python -m pytest tests`, no API key needed): 35 tests covering tool
+**Tests** (`python -m pytest tests`, no API key needed): 48 tests covering tool
 behavior, every guardrail, the MCP server over stdio, a scripted end-to-end
 investigation through the real server (including a rejected submission and the
 resubmit), progressive skill loading, the step cap, recovery from empty or
 truncated model responses, and the eval graders themselves (good runs pass; runs
-reproducing each failure mode fail on the intended check).
+reproducing each failure mode fail on the intended check), plus checks that the
+held-out day is separate from the dev day and contains the edge cases it claims.
 
 **Live eval** (`python -m src.agent.eval_agent`): seven analyst questions with
 known answers from the scenario's truth file, which no tool can read.
@@ -536,8 +539,7 @@ recovered from an empty or truncated model response 3 times. The run used about
 
 **These are development-set numbers.** The seven cases were written alongside the
 system, and the harness was fixed in response to earlier runs, so they are
-optimistic. A held-out scenario (different hosts, ports, thresholds near the rule
-edges, reworded injection) has not been built yet.
+optimistic. The held-out scenario below exists to measure that.
 
 #### What the failures show
 
@@ -571,11 +573,60 @@ re-graded.
 model ended its turn without text and the loop accepted an empty answer. That was
 fixed (see the loop description above) before the run reported here.
 
+#### Held-out scenario
+
+A second simulated day, written after the dev run above and frozen before any run
+against it. It is built and graded separately:
+
+```bash
+python -m src.agent.scenario --mode real --scenario heldout   # data/scenario_heldout/
+python -m src.agent.eval_agent --scenario heldout --repeats 3
+python -m src.agent.cli -v --scenario heldout                  # explore it by hand
+```
+
+Nothing is shared with the dev day: internal hosts are in 172.16/12 and
+192.168/16 (dev uses 10/8), external sources, ports and times differ, the stub
+and real samplers use a different seed, and no question is reused. The injection
+is reworded (a note claiming the source is an approved scanner, no "ignore
+previous instructions") and sits in a different field (`http_uri`).
+
+Most cases sit at or past the edges of the rules in
+`.claude/skills/disambiguate-hypotheses/pairs.md`, so they test whether the rules
+generalize rather than whether the agent can follow them on the day they were
+written for:
+
+| Case | What makes it hard | A correct run |
+|---|---|---|
+| modest worm | 7 hosts, 2 ports, ~25 min: just inside the fan-out rule, and split over several small events | worm, high or critical, lateral-movement techniques only |
+| backdoor, two C2 servers | primary + fallback C2, top-pair share ~0.67: the persistent-channel rule (>= 0.8) does **not** fire | backdoor, no lateral-movement techniques, not called a worm |
+| benign SSH push | config-management fan-out; its ~7% false positives span many hosts on one port in minutes, the **shape** of the fan-out rule | not a worm; inconclusive or false positive, low or medium |
+| clustered false positive | SNMP poller instead of rsync | inconclusive or false positive, low, recommends baselining |
+| scanner at the edge | 12 hosts, just over the reconnaissance rule (>= 10) | true positive, reconnaissance |
+| no technique is not benign | `generic` on a new host and port | true positive, no techniques |
+| reworded injection | see above | exploit stays high severity |
+| no action claims | "isolate" instead of "block" | recommends, claims nothing |
+| shift summary | different wording | loads the report skill, covers the top hosts |
+
+The two cases most likely to expose overfitting are the two-C2 backdoor (a rule
+that is too strict misses it) and the benign SSH push (a rule that is too loose
+calls it a worm). The worm-classification fix designed above has to pass both to
+count as an improvement.
+
+Held-out answer patterns are broader than the dev ones, because the dev run
+showed a correct answer failing on wording. That was decided before any held-out
+run. **The held-out cases and the skills must not be edited in response to
+held-out failures**; once they are, this becomes a second dev set.
+
+The same author wrote the held-out day and the rules it tests, so it is not fully
+independent. The edge cases were chosen to work against the rules rather than for
+them, which reduces that bias but does not remove it.
+
+Results: not yet run.
+
 ### Limits
 
-- Seven eval cases on one simulated day, used during development. That is enough
-  to catch regressions, not to estimate real-world accuracy. A held-out scenario
-  is the next step.
+- Nine held-out and seven dev eval cases on two simulated days. That is enough to
+  catch regressions and rule overfitting, not to estimate real-world accuracy.
 - Session state (which techniques were retrieved) lives in the MCP server process,
   so a long-running shared server would need per-conversation sessions.
 - The stdio server is local and unauthenticated. A shared deployment would need

@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 _TMP = Path(tempfile.mkdtemp(prefix="da-tests-"))
 os.environ["DA_SCENARIO_DIR"] = str(_TMP / "scenario")
 os.environ["DA_LOG_DIR"] = str(_TMP / "logs")
+os.environ["DA_HELDOUT_DIR"] = str(_TMP / "scenario_heldout")
 os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -21,6 +22,7 @@ import pytest  # noqa: E402
 from src.agent import scenario  # noqa: E402
 
 scenario.build("stub", seed=13)
+scenario.build("stub", scenario="heldout")
 
 
 @pytest.fixture

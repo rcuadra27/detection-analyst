@@ -75,6 +75,19 @@ class AgentTurn:
     usage: dict = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0})
 
 
+def use_scenario(name: str) -> Path:
+    """Point the MCP server (a subprocess) at a named scenario. Returns its directory.
+
+    The server reads DA_SCENARIO_DIR at import, and connect_mcp passes this
+    process's environment to it, so setting it here is enough."""
+    from src.agent.store import SCENARIO_DIRS
+
+    d = SCENARIO_DIRS[name]
+    d = d if d.is_absolute() else REPO_ROOT / d
+    os.environ["DA_SCENARIO_DIR"] = str(d)
+    return d
+
+
 @asynccontextmanager
 async def connect_mcp(session_id: str):
     """Launch the MCP server as a subprocess over stdio and open a client session."""
@@ -308,8 +321,13 @@ def main() -> None:
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--max-steps", type=int, default=MAX_STEPS)
     ap.add_argument("-v", "--verbose", action="store_true", help="show each tool call")
+    ap.add_argument("--scenario", choices=["dev", "heldout"], default="dev",
+                    help="which investigation day the tools read")
     args = ap.parse_args()
     os.chdir(REPO_ROOT)
+    if not (use_scenario(args.scenario) / "flows.jsonl").exists():
+        raise SystemExit(f"No {args.scenario} scenario built yet. Run: "
+                         f"python -m src.agent.scenario --mode real --scenario {args.scenario}")
     from dotenv import load_dotenv
     load_dotenv()
     if not os.environ.get("ANTHROPIC_API_KEY"):
