@@ -13,5 +13,6 @@ data/processed/*
 # agent layer: generated scenario, audit logs, transcripts, eval runs
 data/scenario/
 data/scenario_heldout/
+data/scenario_heldout2/
 logs/
 .pytest_cache/

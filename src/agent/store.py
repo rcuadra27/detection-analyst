@@ -31,6 +31,7 @@ TRUTH_PATH = SCENARIO_DIR / "truth.json"
 SCENARIO_DIRS = {
     "dev": SCENARIO_DIR,
     "heldout": Path(os.environ.get("DA_HELDOUT_DIR", "data/scenario_heldout")),
+    "heldout2": Path(os.environ.get("DA_HELDOUT2_DIR", "data/scenario_heldout2")),
 }
 
 

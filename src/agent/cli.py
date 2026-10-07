@@ -321,7 +321,7 @@ def main() -> None:
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--max-steps", type=int, default=MAX_STEPS)
     ap.add_argument("-v", "--verbose", action="store_true", help="show each tool call")
-    ap.add_argument("--scenario", choices=["dev", "heldout"], default="dev",
+    ap.add_argument("--scenario", choices=["dev", "heldout", "heldout2"], default="dev",
                     help="which investigation day the tools read")
     args = ap.parse_args()
     os.chdir(REPO_ROOT)
