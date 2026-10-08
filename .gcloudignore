@@ -1,0 +1,19 @@
+# Files uploaded by `gcloud run deploy --source .`. Without this file gcloud falls
+# back to .gitignore, which excludes data/scenario/, and the build would fail.
+# Upload only what the Dockerfile copies.
+*
+!Dockerfile
+!.dockerignore
+!requirements-web.txt
+!src/
+!src/**
+!.claude/
+!.claude/skills/
+!.claude/skills/**
+!data/
+!data/raw/
+!data/raw/attack_techniques_cache.json
+!data/scenario/
+!data/scenario/flows.jsonl
+!data/scenario/meta.json
+**/__pycache__/

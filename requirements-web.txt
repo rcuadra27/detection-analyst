@@ -1,0 +1,11 @@
+# Runtime dependencies for the deployed web host only (see Dockerfile).
+# The full requirements.txt also covers training, pcap parsing and the RAG
+# experiments, none of which run in the container.
+anthropic==0.117.0
+mcp==1.27.0
+pydantic==2.13.4
+numpy==2.5.1
+pandas==3.0.3
+python-dotenv==1.2.2
+fastapi==0.143.0
+uvicorn==0.54.0

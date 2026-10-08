@@ -1,0 +1,13 @@
+# Default deny: the Dockerfile copies only what the web host needs.
+*
+!src/
+!.claude/skills/
+!requirements-web.txt
+!data/raw/attack_techniques_cache.json
+!data/scenario/flows.jsonl
+!data/scenario/meta.json
+# Never ship the answer key, secrets, logs or caches, even if a rule above changes.
+data/scenario/truth.json
+.env
+logs/
+**/__pycache__/

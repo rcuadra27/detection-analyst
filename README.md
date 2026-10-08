@@ -492,9 +492,23 @@ it and `.claude/skills/` provides the skills. For Claude Desktop, add to
   "args": ["/path/to/detection-analyst/src/agent/mcp_server.py"]}}}
 ```
 
+### Hosted app
+
+`src/agent/web.py` is a third host for the same agent: a chat page on Cloud Run
+where testers sign in with personal access codes. Each chat gets its own MCP server
+subprocess, so tools and guardrails are identical to the CLI. Every question,
+rating and triage review is logged as one JSON line for Cloud Logging, and spend
+is capped in code (daily token budget, per-chat question cap, session cap).
+`eval_agent --url` runs the same eval cases against the deployed app. Setup:
+[docs/deploy.md](docs/deploy.md).
+
+```bash
+DA_ALLOW_NO_AUTH=1 uvicorn src.agent.web:app --port 8080   # local, no access codes
+```
+
 ### Evaluation
 
-**Tests** (`python -m pytest tests`, no API key needed): 61 tests covering tool
+**Tests** (`python -m pytest tests`, no API key needed): 71 tests covering tool
 behavior, every guardrail, the MCP server over stdio, a scripted end-to-end
 investigation through the real server (including a rejected submission and the
 resubmit), progressive skill loading, the step cap, recovery from empty or
@@ -738,10 +752,10 @@ held-out for it.
 
 - 25 eval cases on three simulated days built from one dataset. That is enough to
   catch regressions and rule overfitting, not to estimate real-world accuracy.
-- Session state (which techniques were retrieved) lives in the MCP server process,
-  so a long-running shared server would need per-conversation sessions.
-- The stdio server is local and unauthenticated. A shared deployment would need
-  authentication and per-user access control.
+- Session state (which techniques were retrieved) lives in the MCP server process.
+  The hosted app gives each chat its own server process for this reason.
+- The hosted app authenticates testers with access codes, not real identities, and
+  keeps sessions in one instance's memory. That fits a small tester group, not a team.
 - The agent inherits every detector limitation in §4 and §6. It can see host-level
   patterns the per-flow detector cannot, but the technique guardrail does not yet
   let that evidence change the class (see the worm result above).
