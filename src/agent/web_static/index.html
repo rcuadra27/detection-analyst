@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Detection Analyst</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1f23; --muted: #6a6f78; --line: #e3e1dc;
+    --accent: #2f5d8a; --accent-ink: #ffffff; --warn: #9a5b00; --bad: #a33a2b; --good: #2e7a4f;
+    --chip: #eef1f5; --code: #f2f1ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171a; --panel: #1d2024; --ink: #e7e8ea; --muted: #9aa0a8; --line: #2e3237;
+      --accent: #7fa8d6; --accent-ink: #0f1215; --warn: #e0a54a; --bad: #e27b6b; --good: #6cc196;
+      --chip: #262a30; --code: #23262b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); padding: 6px 12px; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .wrap { display: grid; grid-template-columns: 300px 1fr; gap: 0; height: calc(100vh - 53px); }
+  aside { border-right: 1px solid var(--line); overflow: auto; padding: 16px; background: var(--panel); }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; }
+  .ev { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; cursor: pointer; }
+  .ev:hover .src { color: var(--accent); }
+  .ev .src { font-weight: 600; font-family: ui-monospace, Menlo, monospace; }
+  .ev .sub { color: var(--muted); }
+  .note { color: var(--muted); font-size: 12px; margin-top: 14px; }
+  main { display: flex; flex-direction: column; min-width: 0; }
+  #log { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  .msg { max-width: 820px; }
+  .msg.user { align-self: flex-end; background: var(--chip); padding: 10px 14px; border-radius: 12px; }
+  .msg.agent { background: var(--panel); border: 1px solid var(--line); padding: 14px 16px; border-radius: 12px; }
+  .msg.agent p { margin: 0 0 8px; } .msg.agent ul { margin: 0 0 8px; padding-left: 20px; }
+  .msg.err { color: var(--bad); }
+  .stats { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  details { margin-top: 10px; font-size: 13px; }
+  summary { cursor: pointer; color: var(--muted); }
+  .call { border-top: 1px dashed var(--line); padding: 6px 0; }
+  .call .name { font-family: ui-monospace, Menlo, monospace; font-weight: 600; }
+  .call.rejected .name { color: var(--bad); }
+  pre { background: var(--code); padding: 8px; border-radius: 6px; overflow: auto; max-height: 260px;
+        font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 4px 0; }
+  .triage { margin-top: 12px; border: 1px solid var(--line); border-left: 4px solid var(--warn);
+            border-radius: 8px; padding: 10px 12px; }
+  .triage.approved { border-left-color: var(--good); } .triage.rejected { border-left-color: var(--bad); }
+  .triage .head { font-weight: 600; }
+  .triage .row { font-size: 13px; color: var(--muted); }
+  .triage textarea, .fb textarea { width: 100%; margin-top: 6px; font: inherit; font-size: 13px; padding: 6px;
+            border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+  .actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .fb { margin-top: 10px; font-size: 13px; }
+  .progress { color: var(--muted); font-size: 13px; font-family: ui-monospace, Menlo, monospace; }
+  .composer { border-top: 1px solid var(--line); padding: 12px 20px; background: var(--panel); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip { background: var(--chip); border: none; font-size: 13px; border-radius: 999px; padding: 5px 12px; }
+  .row-in { display: flex; gap: 8px; }
+  #q { flex: 1; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+       background: var(--bg); color: var(--ink); resize: none; }
+  #login { max-width: 380px; margin: 12vh auto; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 12px; padding: 24px; }
+  #login input { width: 100%; font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+                 margin: 10px 0; background: var(--bg); color: var(--ink); }
+  .hidden { display: none !important; }
+  @media (max-width: 760px) {
+    .wrap { grid-template-columns: 1fr; height: auto; }
+    aside { border-right: none; border-bottom: 1px solid var(--line); max-height: 220px; }
+    #log { min-height: 55vh; padding: 14px; } .composer { padding: 12px 14px; position: sticky; bottom: 0; }
+    header { padding: 12px 16px; }
+    .chips { flex-wrap: nowrap; overflow-x: auto; margin-bottom: 8px; }
+    .chip { white-space: nowrap; }
+  }
+</style>
+</head>
+<body>
+<div id="login">
+  <h1 style="margin-top:0;font-size:20px">Detection Analyst</h1>
+  <p style="color:var(--muted)">An investigation agent over one simulated day of network traffic.
+    Enter the access code you were given.</p>
+  <input id="code" type="password" placeholder="Access code" autocomplete="off">
+  <button class="primary" id="go">Continue</button>
+  <div id="loginErr" class="msg err" style="margin-top:10px"></div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>Detection Analyst</h1>
+    <div class="meta"><span id="who"></span> · <span id="left"></span>
+      <button id="newChat" style="margin-left:8px">New chat</button></div>
+  </header>
+  <div class="wrap">
+    <aside>
+      <h2>Today's top events</h2>
+      <div id="events">Loading…</div>
+      <div class="note">Simulated traffic scored by the trained detector. The agent can only read
+        it through six read-only tools. It cannot block or change anything.</div>
+    </aside>
+    <main>
+      <div id="log"></div>
+      <div class="composer">
+        <div class="chips" id="chips"></div>
+        <div class="row-in">
+          <textarea id="q" rows="2" placeholder="Ask about today's detections…"></textarea>
+          <button class="primary" id="send">Ask</button>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+const STARTERS = [
+  "What are the most serious events today?",
+  "Is 10.0.3.57 a worm or a backdoor?",
+  "Is 10.0.9.200 compromised?",
+  "Triage the activity from 198.51.100.61.",
+  "Give me a shift summary.",
+];
+let code = sessionStorage.getItem("da_code") || "";
+let sessionId = null, busy = false;
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json",
+    "X-Access-Code": code, ...(opts.headers || {}) } });
+  let body = {};
+  try { body = await res.json(); } catch (e) {}
+  if (!res.ok) { const err = new Error(body.detail || res.statusText); err.status = res.status; throw err; }
+  return body;
+}
+
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+function md(text) {   // small, safe subset: paragraphs, bullets, **bold**, `code`
+  const lines = esc(text).split("\n"); let html = "", inList = false;
+  const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  for (const raw of lines) {
+    const line = raw.trim();
+    const m = line.match(/^([-*]|\d+\.)\s+(.*)/);
+    if (m) { if (!inList) { html += "<ul>"; inList = true; } html += `<li>${inline(m[2])}</li>`; continue; }
+    if (inList) { html += "</ul>"; inList = false; }
+    if (line.replace(/^#+\s*/, "")) html += `<p>${inline(line.replace(/^#+\s*/, ""))}</p>`;
+  }
+  return html + (inList ? "</ul>" : "");
+}
+
+function pretty(s) {   // tool results are JSON strings; indent them for reading
+  try { s = JSON.stringify(JSON.parse(s), null, 1); } catch (e) {}
+  return s.length > 3000 ? s.slice(0, 3000) + "\n…" : s;
+}
+
+function add(cls, html) {
+  const d = document.createElement("div"); d.className = "msg " + cls; d.innerHTML = html;
+  $("log").appendChild(d); $("log").scrollTop = $("log").scrollHeight; return d;
+}
+
+async function login() {
+  code = $("code").value.trim() || code;
+  try {
+    const r = await api("/api/login", { method: "POST", body: JSON.stringify({ code }) });
+    sessionStorage.setItem("da_code", code);
+    $("who").textContent = r.tester;
+    $("login").classList.add("hidden"); $("app").classList.remove("hidden");
+    loadEvents(); await newChat();
+  } catch (e) { $("loginErr").textContent = e.message; sessionStorage.removeItem("da_code"); }
+}
+
+async function loadEvents() {
+  try {
+    const r = await api("/api/events");
+    $("events").innerHTML = r.events.map(e => `<div class="ev" data-src="${esc(e.source)}">
+      <div class="src">${esc(e.source)}</div>
+      <div class="sub">${esc(e.window)} · ${esc(e.suspicious_flows)} suspicious flows · risk ${esc(e.risk_score)}</div>
+      <div class="sub">detector: ${esc(e.dominant_predicted_class)}</div></div>`).join("");
+    document.querySelectorAll(".ev").forEach(el => el.onclick = () => {
+      $("q").value = `What happened with ${el.dataset.src}?`; $("q").focus(); });
+  } catch (e) { $("events").textContent = "Could not load events."; }
+}
+
+async function newChat() {
+  $("log").innerHTML = ""; sessionId = null; $("send").disabled = true;
+  add("agent", '<div class="progress">Starting a new chat…</div>');
+  try {
+    const r = await api("/api/sessions", { method: "POST" });
+    $("log").innerHTML = "";
+    sessionId = r.session_id; $("send").disabled = false; $("left").textContent = `${r.questions_left} questions left`;
+    add("agent", "<p>Ask about today's detections, or pick a starter below. Every answer shows the tool calls behind it. Use the thumbs to rate answers, and approve or reject any triage the agent submits.</p>");
+  } catch (e) { add("err", esc(e.message)); }
+}
+
+async function ask(question) {
+  if (busy || !sessionId || !question.trim()) return;
+  busy = true; $("send").disabled = true; $("q").value = "";
+  add("user", esc(question));
+  const prog = add("agent", '<div class="progress">Starting…</div>');
+  const timer = setInterval(async () => {
+    try {
+      const p = await api(`/api/sessions/${sessionId}/progress`);
+      if (p.progress.length) prog.innerHTML = '<div class="progress">' + p.progress.slice(-4).map(esc).join("<br>") + "</div>";
+    } catch (e) {}
+  }, 900);
+  try {
+    const r = await api(`/api/sessions/${sessionId}/ask`, { method: "POST", body: JSON.stringify({ question }) });
+    prog.remove(); renderAnswer(r);
+    $("left").textContent = `${r.questions_left} questions left`;
+  } catch (e) {
+    prog.remove();
+    if (e.status === 404) { add("err", "This chat expired, so a new one was started. Ask again."); await newChat(); }
+    else add("err", esc(e.message));
+  } finally { clearInterval(timer); busy = false; $("send").disabled = false; }
+}
+
+function renderAnswer(r) {
+  const calls = r.tool_calls.map(c => `<div class="call ${c.is_error ? "rejected" : ""}">
+      <span class="name">${esc(c.name)}</span>${c.is_error ? " · rejected" : ""}
+      <pre>${esc(JSON.stringify(c.input, null, 1))}</pre>
+      <pre>${esc(pretty(c.result))}</pre></div>`).join("");
+  const triages = r.triages.map(t => `<div class="triage" data-id="${esc(t.triage_id)}">
+      <div class="head">Triage ${esc(t.triage_id)} · pending analyst review</div>
+      <div class="row">${esc(t.event_id)} · ${esc(t.assessment)} · severity ${esc(t.severity)} · confidence ${esc(t.confidence)}</div>
+      <div class="row">Techniques: ${esc((t.attack_technique_ids || []).join(", ") || "none")}</div>
+      <div class="row">Recommended: ${esc(t.recommended_action)}</div>
+      <textarea placeholder="Reason (required to reject)"></textarea>
+      <div class="actions"><button data-d="approve">Approve</button><button data-d="reject">Reject</button>
+        <span class="row status"></span></div></div>`).join("");
+  const d = add("agent", md(r.answer) + triages +
+    `<div class="stats">${r.steps} steps · ${r.tool_calls.length} tool calls · ${(r.latency_ms / 1000).toFixed(1)}s` +
+    (r.guardrail_rejections.length ? ` · ${r.guardrail_rejections.length} guardrail rejection(s)` : "") + `</div>
+    <details><summary>Evidence: tool calls behind this answer</summary>${calls || "<p>No tools were called.</p>"}</details>
+    <div class="fb"><div class="actions"><button data-r="up">👍</button><button data-r="down">👎</button>
+      <span class="row status"></span></div>
+      <textarea placeholder="Optional: what was right or wrong?" rows="2"></textarea></div>`);
+
+  d.querySelectorAll(".triage").forEach(card => card.querySelectorAll("button").forEach(b => b.onclick = async () => {
+    const reason = card.querySelector("textarea").value;
+    try {
+      await api("/api/review", { method: "POST", body: JSON.stringify({ triage_id: card.dataset.id, decision: b.dataset.d, reason }) });
+      card.classList.add(b.dataset.d === "approve" ? "approved" : "rejected");
+      card.querySelector(".head").textContent = `Triage ${card.dataset.id} · ${b.dataset.d}d by you`;
+      card.querySelectorAll("button").forEach(x => x.disabled = true);
+    } catch (e) { card.querySelector(".status").textContent = e.message; }
+  }));
+  const fb = d.querySelector(".fb");
+  fb.querySelectorAll("button").forEach(b => b.onclick = async () => {
+    try {
+      await api("/api/feedback", { method: "POST", body: JSON.stringify({ turn_id: r.turn_id, rating: b.dataset.r, comment: fb.querySelector("textarea").value }) });
+      fb.querySelector(".status").textContent = "Thanks, recorded.";
+      fb.querySelectorAll("button").forEach(x => x.disabled = true);
+    } catch (e) { fb.querySelector(".status").textContent = e.message; }
+  });
+}
+
+$("chips").innerHTML = STARTERS.map(s => `<button class="chip">${esc(s)}</button>`).join("");
+document.querySelectorAll(".chip").forEach(b => b.onclick = () => ask(b.textContent));
+$("send").onclick = () => ask($("q").value);
+$("q").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("q").value); } });
+$("go").onclick = login;
+$("code").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
+$("newChat").onclick = () => { if (!busy) newChat(); };
+if (code) login();
+</script>
+</body>
+</html>

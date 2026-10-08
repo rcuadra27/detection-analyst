@@ -18,6 +18,15 @@ Every case runs in a fresh MCP session, so no state leaks between cases.
 
 Dev and held-out results are reported separately. Only held-out numbers say
 anything about how the agent generalizes; dev numbers are regression checks.
+
+    python -m src.agent.eval_agent --url https://<service>.run.app   # the deployed app
+
+With --url the questions go to the deployed web host instead of a local agent, so
+the eval checks what testers actually use. The app must serve the same scenario
+build as your local --scenario directory (checked against meta.json before any
+case runs). Use an access code reserved for evals (DA_ACCESS_CODE), so eval
+traffic is labeled separately from testers in the logs. The truth file stays on
+your machine: it is not part of the deployed image.
 """
 
 from __future__ import annotations
@@ -321,9 +330,35 @@ async def run_case(case: dict, model: str, llm) -> AgentTurn:
         return await agent.ask(case["question"])
 
 
-async def main_async(args) -> int:
-    from anthropic import AsyncAnthropic
+async def run_case_remote(case: dict, url: str, code: str, transport=None) -> AgentTurn:
+    """Ask the deployed web host, in a fresh chat session per case."""
+    import httpx
 
+    async with httpx.AsyncClient(base_url=url.rstrip("/"), headers={"X-Access-Code": code},
+                                 timeout=600.0, transport=transport) as client:
+        r = await client.post("/api/sessions")
+        r.raise_for_status()
+        sid = r.json()["session_id"]
+        r = await client.post(f"/api/sessions/{sid}/ask", json={"question": case["question"]})
+        r.raise_for_status()
+        body = r.json()
+    return AgentTurn(answer=body["answer"], tool_calls=body["tool_calls"], steps=body["steps"],
+                     hit_step_cap=body["hit_step_cap"], stop_reasons=body["stop_reasons"],
+                     recoveries=body["recoveries"], usage=body["usage"])
+
+
+async def remote_scenario_meta(url: str, code: str, transport=None) -> dict:
+    """The scenario meta.json the deployed app is serving."""
+    import httpx
+
+    async with httpx.AsyncClient(base_url=url.rstrip("/"), headers={"X-Access-Code": code},
+                                 timeout=60.0, transport=transport) as client:
+        r = await client.get("/api/status")
+        r.raise_for_status()
+        return r.json()["scenario"]
+
+
+async def main_async(args) -> int:
     scenario_dir = use_scenario(args.scenario)
     truth_path = scenario_dir / "truth.json"
     if not truth_path.exists():
@@ -339,13 +374,27 @@ async def main_async(args) -> int:
     pool = SCENARIO_CASES[args.scenario]
     cases = [c for c in pool if not args.only or c["id"] in args.only.split(",")]
     check_cases_match_truth(cases, truth)
+    if args.url:
+        code = args.access_code or os.environ.get("DA_ACCESS_CODE", "")
+        if not code:
+            raise SystemExit("Remote eval needs --access-code or DA_ACCESS_CODE.")
+        served = await remote_scenario_meta(args.url, code)
+        if served != meta:
+            raise SystemExit(f"{args.url} serves a different scenario build than "
+                             f"{scenario_dir / 'meta.json'}. Its answer key would not match. "
+                             f"Redeploy, or point --scenario at the build you deployed.")
     print(f"Scenario: {args.scenario} ({scenario_dir}), {len(cases)} cases, "
           f"{args.repeats} repeat(s), model {args.model}")
-    llm = AsyncAnthropic()
+    if not args.url:
+        from anthropic import AsyncAnthropic
+        llm = AsyncAnthropic()
     results = []
     for rep in range(args.repeats):
         for case in cases:
-            turn = await run_case(case, args.model, llm)
+            if args.url:
+                turn = await run_case_remote(case, args.url, code)
+            else:
+                turn = await run_case(case, args.model, llm)
             r = grade(case, turn)
             r["repeat"] = rep
             results.append(r)
@@ -377,6 +426,7 @@ async def main_async(args) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"agent-eval-{args.scenario}-{dt.datetime.now():%Y%m%d-%H%M%S}.json"
     path.write_text(json.dumps({"model": args.model, "scenario": args.scenario,
+                                "target": args.url or "local",
                                 "scenario_meta": meta, "results": results},
                                indent=2, default=str))
     print(f"Saved {path}")
@@ -390,10 +440,12 @@ def main() -> None:
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--scenario", choices=sorted(SCENARIO_CASES), default="dev",
                     help="dev: the development day. heldout: the frozen held-out day.")
+    ap.add_argument("--url", help="evaluate the deployed web host at this URL")
+    ap.add_argument("--access-code", help="access code for --url (or set DA_ACCESS_CODE)")
     args = ap.parse_args()
     from dotenv import load_dotenv
     load_dotenv()
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not args.url and not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit("Set ANTHROPIC_API_KEY (in .env) to run the live eval.")
     raise SystemExit(asyncio.run(main_async(args)))
 
