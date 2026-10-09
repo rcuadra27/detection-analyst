@@ -43,7 +43,8 @@ export PROJECT=<your-project-id>
 export REGION=us-west1
 gcloud config set project $PROJECT
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
-    artifactregistry.googleapis.com secretmanager.googleapis.com logging.googleapis.com
+    artifactregistry.googleapis.com secretmanager.googleapis.com logging.googleapis.com \
+    bigquery.googleapis.com
 
 # Service account the app runs as
 gcloud iam service-accounts create detection-analyst-web
@@ -98,6 +99,19 @@ gcloud projects add-iam-policy-binding $PROJECT --member="$WRITER" --role=roles/
 
 ## 4. Deploy
 
+First check exactly what will be uploaded. `gcloud` re-includes everything under a
+directory that `.gcloudignore` negates, so verify the list every time the ignore
+file or the data layout changes:
+
+```bash
+gcloud meta list-files-for-upload | grep -v "^src/"
+```
+
+It must show only `Dockerfile`, `.dockerignore`, `requirements-web.txt`, the four
+files under `.claude/skills/`, `data/raw/attack_techniques_cache.json`,
+`data/scenario/flows.jsonl` and `data/scenario/meta.json`. Never `truth.json`, a
+held-out directory, `data/processed/` or pcaps.
+
 ```bash
 gcloud run deploy detection-analyst \
   --source . \
@@ -136,7 +150,8 @@ it can be filtered out of tester statistics.
 In Cloud Logging: `jsonPayload.event="turn"` (one line per question),
 `"feedback"`, `"review"`, `"turn_failed"`, `"budget_exhausted"`.
 
-In BigQuery (table names come from the log name, check them with `bq ls da_logs`):
+In BigQuery. The sink uses partitioned tables, so the table name has no date
+suffix (check with `bq ls da_logs`; stdout lands in `run_googleapis_com_stdout`):
 
 ```sql
 -- per tester: questions, latency, tokens, guardrail rejections
@@ -144,10 +159,13 @@ SELECT jsonPayload.tester AS tester,
        COUNT(*) AS questions,
        APPROX_QUANTILES(jsonPayload.latency_ms, 100)[OFFSET(50)] AS p50_ms,
        APPROX_QUANTILES(jsonPayload.latency_ms, 100)[OFFSET(95)] AS p95_ms,
-       AVG(jsonPayload.input_tokens + jsonPayload.output_tokens) AS avg_tokens,
+       AVG(jsonPayload.input_tokens) AS avg_uncached_in,
+       AVG(jsonPayload.cache_read_input_tokens) AS avg_cache_read,
+       AVG(jsonPayload.cache_creation_input_tokens) AS avg_cache_write,
+       AVG(jsonPayload.output_tokens) AS avg_out,
        COUNTIF(ARRAY_LENGTH(jsonPayload.guardrail_rejections) > 0) AS turns_with_rejection,
        COUNTIF(jsonPayload.hit_step_cap) AS step_cap_hits
-FROM `da_logs.run_googleapis_com_stdout_*`
+FROM `da_logs.run_googleapis_com_stdout`
 WHERE jsonPayload.event = 'turn' AND jsonPayload.tester != 'eval'
 GROUP BY tester;
 ```

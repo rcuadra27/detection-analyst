@@ -96,7 +96,10 @@ class AccessControl:
 # ------------------------------------------------------------------ budget
 
 class DailyBudget:
-    """Total tokens (in + out) allowed per UTC day. Resets with the day or a restart."""
+    """Tokens processed per UTC day: uncached input, cache reads and writes, and output.
+
+    Cache reads count in full even though they are billed at a fraction, so the cap
+    stays conservative. Resets with the day or a restart."""
 
     def __init__(self, limit: int):
         self.limit = limit
@@ -395,7 +398,7 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
             s.last_used = time.monotonic()
 
         latency_ms = round((time.perf_counter() - started) * 1000)
-        budget.add(turn.usage["input_tokens"] + turn.usage["output_tokens"])
+        budget.add(sum(turn.usage.values()))
         summary = summarize_turn(turn)
         turns[turn_id] = {"session": s.id, "tester": tester}
         for t in summary["triages"]:
@@ -406,6 +409,8 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
                   question=body.question, answer=turn.answer[:MAX_LOGGED_ANSWER_CHARS],
                   latency_ms=latency_ms, steps=turn.steps, hit_step_cap=turn.hit_step_cap,
                   input_tokens=turn.usage["input_tokens"],
+                  cache_read_input_tokens=turn.usage["cache_read_input_tokens"],
+                  cache_creation_input_tokens=turn.usage["cache_creation_input_tokens"],
                   output_tokens=turn.usage["output_tokens"],
                   tools=[c["name"] for c in turn.tool_calls],
                   tool_errors=summary["tool_errors"],

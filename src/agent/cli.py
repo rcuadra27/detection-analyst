@@ -38,6 +38,8 @@ DEFAULT_MODEL = os.environ.get("DA_MODEL", "claude-sonnet-5")
 MAX_STEPS = 15
 MAX_OUTPUT_TOKENS = 4096
 MAX_TOOL_RESULT_CHARS = 20000
+USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+                "output_tokens")
 
 SYSTEM_PROMPT = """You are the investigation agent for Detection Analyst, assisting a SOC \
 analyst with network intrusion detections.
@@ -72,7 +74,8 @@ class AgentTurn:
     hit_step_cap: bool = False
     stop_reasons: list[str] = field(default_factory=list)
     recoveries: list[str] = field(default_factory=list)   # empty or truncated responses handled
-    usage: dict = field(default_factory=lambda: {"input_tokens": 0, "output_tokens": 0})
+    # input_tokens counts only uncached input; cache reads and writes are separate.
+    usage: dict = field(default_factory=lambda: dict.fromkeys(USAGE_FIELDS, 0))
 
 
 def use_scenario(name: str) -> Path:
@@ -165,11 +168,31 @@ class Agent:
             text = text[:MAX_TOOL_RESULT_CHARS] + "\n[result truncated by harness]"
         return text, is_error
 
+    def _messages_with_cache_breakpoint(self) -> list[dict]:
+        """The conversation, with a cache breakpoint on the last block of the last message.
+
+        Each step resends the whole conversation. Marking its end lets the next step
+        read everything up to here from the prompt cache instead of reprocessing it,
+        so a multi-step investigation pays full price only for what is new. The
+        stored conversation is not modified: the marker moves forward every step."""
+        if not self.messages:
+            return self.messages
+        last = dict(self.messages[-1])
+        content = last["content"]
+        blocks = ([{"type": "text", "text": content}] if isinstance(content, str)
+                  else [dict(b) for b in content])
+        if not blocks:
+            return self.messages
+        blocks[-1] = {**blocks[-1], "cache_control": {"type": "ephemeral"}}
+        last["content"] = blocks
+        return self.messages[:-1] + [last]
+
     async def _create(self, use_tools: bool = True, max_tokens: int = MAX_OUTPUT_TOKENS):
+        # Breakpoints (max 4): tools, system prompt, end of conversation.
         kwargs = dict(model=self.model, max_tokens=max_tokens,
                       system=[{"type": "text", "text": self.system,
                                "cache_control": {"type": "ephemeral"}}],
-                      messages=self.messages)
+                      messages=self._messages_with_cache_breakpoint())
         if use_tools:
             kwargs["tools"] = self.tools
         return await self.llm.messages.create(**kwargs)
@@ -230,8 +253,8 @@ class Agent:
 
     @staticmethod
     def _count(turn: AgentTurn, resp) -> None:
-        turn.usage["input_tokens"] += resp.usage.input_tokens
-        turn.usage["output_tokens"] += resp.usage.output_tokens
+        for k in USAGE_FIELDS:   # cache fields are absent on some responses and test doubles
+            turn.usage[k] += getattr(resp.usage, k, None) or 0
         turn.stop_reasons.append(resp.stop_reason)
 
     async def _llm_step(self, turn: AgentTurn):
@@ -312,7 +335,9 @@ async def _main(args) -> None:
             turn = await agent.ask(q)
             print(f"\n{turn.answer}")
             print(f"\n[{turn.steps} steps, {len(turn.tool_calls)} tool calls, "
-                  f"{turn.usage['input_tokens']} in / {turn.usage['output_tokens']} out tokens]")
+                  f"{turn.usage['input_tokens']} in, {turn.usage['cache_read_input_tokens']} "
+                  f"cache read, {turn.usage['cache_creation_input_tokens']} cache write, "
+                  f"{turn.usage['output_tokens']} out tokens]")
 
 
 def main() -> None:

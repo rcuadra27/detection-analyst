@@ -187,3 +187,39 @@ def test_truncated_tool_call_never_enters_the_conversation():
                 assert ids == [r["tool_use_id"] for r in nxt]
     assert all(not (b.get("type") == "tool_use" and b.get("id") == "call_9")
                for m in agent.messages if isinstance(m["content"], list) for b in m["content"])
+
+
+def _breakpoints(messages):
+    return [(i, j) for i, m in enumerate(messages) if isinstance(m["content"], list)
+            for j, b in enumerate(m["content"]) if "cache_control" in b]
+
+
+def test_conversation_end_is_marked_for_caching_every_step():
+    agent, llm, turn = run(_investigate(WORM_INVESTIGATION))
+    for req in llm.requests:
+        msgs = req["messages"]
+        last = len(msgs) - 1
+        assert _breakpoints(msgs) == [(last, len(msgs[last]["content"]) - 1)]   # exactly one, at the end
+        n = sum(1 for _ in _breakpoints(msgs)) + 1 + sum("cache_control" in t for t in req["tools"])
+        assert n <= 4                                                            # API limit
+    assert _breakpoints(agent.messages) == []           # the stored conversation is never marked
+    assert isinstance(agent.messages[0]["content"], str)
+
+
+def test_cache_usage_is_counted():
+    class CachingLLM(ScriptedLLM):
+        async def _create(self, **kw):
+            resp = await super()._create(**kw)
+            resp.usage = NS(input_tokens=50, output_tokens=20,
+                            cache_read_input_tokens=1000, cache_creation_input_tokens=200)
+            return resp
+
+    async def go():
+        async with connect_mcp("t-cache") as mcp:
+            agent = Agent(mcp, CachingLLM([[tool(1, "list_events", limit=1)], [text("Done.")]]),
+                          model="scripted")
+            await agent.setup()
+            return await agent.ask("What happened today?")
+    turn = run(go())
+    assert turn.usage == {"input_tokens": 100, "cache_creation_input_tokens": 400,
+                          "cache_read_input_tokens": 2000, "output_tokens": 40}

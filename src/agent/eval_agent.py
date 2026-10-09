@@ -418,9 +418,12 @@ async def main_async(args) -> int:
     recovered = [r["id"] for r in results if r["recoveries"]]
     if recovered:
         print(f"Harness recoveries (empty or truncated responses) in: {', '.join(recovered)}")
-    tokens_in = sum(r["usage"]["input_tokens"] for r in results)
-    tokens_out = sum(r["usage"]["output_tokens"] for r in results)
-    print(f"Tokens: {tokens_in:,} in / {tokens_out:,} out")
+    tot = {k: sum(r["usage"].get(k, 0) for r in results)
+           for k in ("input_tokens", "cache_read_input_tokens",
+                     "cache_creation_input_tokens", "output_tokens")}
+    print(f"Tokens: {tot['input_tokens']:,} uncached in, {tot['cache_read_input_tokens']:,} "
+          f"cache read, {tot['cache_creation_input_tokens']:,} cache write, "
+          f"{tot['output_tokens']:,} out")
 
     out_dir = LOG_DIR / "evals"
     out_dir.mkdir(parents=True, exist_ok=True)
