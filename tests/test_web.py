@@ -150,3 +150,11 @@ def test_remote_eval_grades_the_deployed_host():
     assert result["checks"]["called_get_host_activity"]["ok"]
     assert result["checks"]["triage_submitted"]["ok"]
     assert result["checks"]["severity"]["ok"]
+
+
+def test_remote_eval_records_a_crashed_case_and_continues():
+    from src.agent.eval_agent import errored
+
+    r = errored({"id": "shift_summary"}, TimeoutError("read timed out"))
+    assert not r["passed"] and "TimeoutError" in r["error"]
+    assert r["checks"]["completed"]["ok"] is False and r["usage"] == {}

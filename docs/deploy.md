@@ -119,7 +119,7 @@ gcloud run deploy detection-analyst \
   --service-account $SA \
   --allow-unauthenticated \
   --max-instances 1 --min-instances 0 \
-  --memory 2Gi --cpu 2 --timeout 300 --concurrency 20 \
+  --memory 2Gi --cpu 2 --timeout 900 --concurrency 20 \
   --set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest,DA_ACCESS_CODES=da-access-codes:latest \
   --set-env-vars DA_MODEL=claude-sonnet-5,DA_DAILY_TOKEN_BUDGET=5000000
 ```
@@ -132,7 +132,9 @@ Why these settings:
   instance would not know the first one's sessions.
 - `--min-instances 0`: no cost when idle. After about 15 idle minutes the instance
   can shut down; open chats then expire and the page starts a new one.
-- `--timeout 300`: one investigation can take a minute or more of tool calls.
+- `--timeout 900`: most questions take under a minute, but a shift summary makes 20+
+  tool calls and ran past the original 300-second limit. The eval client waits 960 s,
+  so a server timeout shows up as a 504 rather than a client hang.
 
 ## 5. Smoke test, then the eval against the live URL
 

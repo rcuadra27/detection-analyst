@@ -238,6 +238,10 @@ HELDOUT2_CASES = [
 
 SCENARIO_CASES = {"dev": CASES, "heldout": HELDOUT_CASES, "heldout2": HELDOUT2_CASES}
 
+# Longer than the Cloud Run request timeout (docs/deploy.md), so the server's own
+# timeout answer (504) arrives before the client gives up.
+REMOTE_TIMEOUT = 960.0
+
 _NUM = re.compile(r"(?<![\w.])(\d+\.\d+|\d+)(?![\w.])")
 
 
@@ -330,12 +334,21 @@ async def run_case(case: dict, model: str, llm) -> AgentTurn:
         return await agent.ask(case["question"])
 
 
+def errored(case: dict, exc: Exception) -> dict:
+    """A case that crashed (timeout, HTTP error, API error) is a failed result, not a crash."""
+    msg = f"{type(exc).__name__}: {exc}"[:500]
+    return {"id": case["id"], "passed": False, "error": msg,
+            "checks": {"completed": {"ok": False, "detail": msg}}, "soft": {}, "steps": 0,
+            "tool_calls": [], "stop_reasons": [], "recoveries": [],
+            "usage": {}, "answer": ""}
+
+
 async def run_case_remote(case: dict, url: str, code: str, transport=None) -> AgentTurn:
     """Ask the deployed web host, in a fresh chat session per case."""
     import httpx
 
     async with httpx.AsyncClient(base_url=url.rstrip("/"), headers={"X-Access-Code": code},
-                                 timeout=600.0, transport=transport) as client:
+                                 timeout=REMOTE_TIMEOUT, transport=transport) as client:
         r = await client.post("/api/sessions")
         r.raise_for_status()
         sid = r.json()["session_id"]
@@ -391,15 +404,21 @@ async def main_async(args) -> int:
     results = []
     for rep in range(args.repeats):
         for case in cases:
-            if args.url:
-                turn = await run_case_remote(case, args.url, code)
-            else:
-                turn = await run_case(case, args.model, llm)
-            r = grade(case, turn)
+            started = dt.datetime.now()
+            try:
+                if args.url:
+                    turn = await run_case_remote(case, args.url, code)
+                else:
+                    turn = await run_case(case, args.model, llm)
+                r = grade(case, turn)
+            except Exception as exc:   # one broken case must not lose the rest of the run
+                r = errored(case, exc)
             r["repeat"] = rep
+            r["seconds"] = round((dt.datetime.now() - started).total_seconds(), 1)
             results.append(r)
-            mark = "PASS" if r["passed"] else "FAIL"
-            print(f"  {mark}  {case['id']:<28} {r['steps']:>2} steps  {len(r['tool_calls']):>2} tools")
+            mark = "ERROR" if r.get("error") else ("PASS" if r["passed"] else "FAIL")
+            print(f"  {mark:<5} {case['id']:<28} {r['steps']:>2} steps  "
+                  f"{len(r['tool_calls']):>2} tools  {r['seconds']:>6.1f}s", flush=True)
 
     n_pass = sum(r["passed"] for r in results)
     print(f"\n{n_pass}/{len(results)} cases passed")
