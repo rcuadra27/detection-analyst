@@ -49,10 +49,14 @@
   .btn:disabled { opacity: .45; cursor: default; }
 
   /* ---------- layout ---------- */
-  .wrap { display: grid; grid-template-columns: 320px 1fr; height: calc(100vh - 56px); }
+  /* The page itself never scrolls on desktop: the alert rail and the chat log each
+     scroll on their own, and the header and composer stay put. */
+  #app:not(.hidden) { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+  .top { flex-shrink: 0; }
+  .wrap { display: grid; grid-template-columns: 320px 1fr; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; }
 
   /* ---------- alert rail ---------- */
-  aside { background: var(--surface); border-right: 1px solid var(--line); overflow: auto; }
+  aside { background: var(--surface); border-right: 1px solid var(--line); overflow: auto; min-height: 0; }
   .rail-head { padding: 18px 18px 10px; }
   .rail-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
   .rail-head p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
@@ -69,7 +73,7 @@
   .rail-note { padding: 14px 18px 20px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); }
 
   /* ---------- thread ---------- */
-  main { display: flex; flex-direction: column; min-width: 0; }
+  main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   #log { flex: 1; overflow: auto; padding: 28px 32px; }
   .thread { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
   .q { align-self: flex-end; max-width: 80%; background: var(--accent-soft); padding: 10px 14px;
@@ -168,7 +172,8 @@
   @media (max-width: 800px) {
     .top { padding: 0 14px; } .scenario, .who { display: none; } .brand { white-space: nowrap; }
     .triage-head { flex-wrap: wrap; } .triage-head .status { margin-left: 0; flex-basis: 100%; }
-    .wrap { grid-template-columns: 1fr; height: auto; }
+    #app:not(.hidden) { height: auto; overflow: visible; }
+    .wrap { grid-template-columns: 1fr; grid-template-rows: auto; height: auto; }
     aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 260px; }
     #log { padding: 18px 14px; min-height: 60vh; }
     .composer { padding: 12px 14px; position: sticky; bottom: 0; }
