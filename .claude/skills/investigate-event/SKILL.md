@@ -45,7 +45,7 @@ If `candidate_techniques` is empty (e.g. `generic`: ATT&CK has no equivalent), c
 - Set `confidence` honestly. Unresolved splits stay at or below 0.6.
 
 ## 6. Submit
-Call `submit_triage`. If rejected, read `errors`, fix exactly what they name, and resubmit once.
+Call `submit_triage` with every field as its own argument: `confidence` and `recommended_action` (one sentence) before `explanation` (2 to 4 sentences). If rejected, read `errors`, fix exactly what they name, and resubmit once.
 
 ## 7. Answer the user
 In 4 to 8 sentences, cover:

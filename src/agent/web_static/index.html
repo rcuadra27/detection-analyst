@@ -337,7 +337,10 @@ function traceStep(c) {
   if (c.is_error) {
     let msg = c.result;
     try { const j = JSON.parse(c.result); msg = (j.errors || [j.message || j.error]).join(" "); } catch (e) {}
-    reject = `<div class="step-reject">${c.name === "submit_triage" ? "Rejected by guardrail: " : "Error: "}${esc(msg)}</div>`;
+    const label = c.name !== "submit_triage" ? "Error: "
+      : String(msg).startsWith("Error executing tool") ? "Rejected (format): "
+      : "Rejected by guardrail: ";
+    reject = `<div class="step-reject">${label}${esc(msg)}</div>`;
   }
   const title = (LABEL[c.name] || (() => `<b>${esc(c.name)}</b>`))(c.input || {});
   return `<li class="step ${c.is_error ? "rejected" : ""}"><div class="step-title">${title}</div>${reject}

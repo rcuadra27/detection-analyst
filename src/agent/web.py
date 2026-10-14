@@ -264,7 +264,9 @@ def summarize_turn(turn: AgentTurn) -> dict:
         if c["is_error"]:
             rejections.extend(result.get("errors") or [c["result"][:300]])
         elif result.get("accepted"):
-            inp = c["input"] or {}
+            # Prefer what was actually queued: fields the model wrote inside its
+            # explanation are recovered server-side and appear only in the result.
+            inp = {**(c["input"] or {}), **(result.get("triage") or {})}
             triages.append({"triage_id": result.get("triage_id"),
                             "event_id": inp.get("event_id"),
                             "severity": inp.get("severity"),

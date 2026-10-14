@@ -158,3 +158,20 @@ def test_remote_eval_records_a_crashed_case_and_continues():
     r = errored({"id": "shift_summary"}, TimeoutError("read timed out"))
     assert not r["passed"] and "TimeoutError" in r["error"]
     assert r["checks"]["completed"]["ok"] is False and r["usage"] == {}
+
+
+def test_triage_card_uses_the_stored_triage_not_the_raw_input():
+    from src.agent.cli import AgentTurn
+    from src.agent.web import summarize_turn
+    turn = AgentTurn(answer="done")
+    turn.tool_calls.append({
+        "name": "submit_triage", "is_error": False,
+        "input": {"event_id": "EV-1", "severity": "high", "assessment": "true_positive",
+                  "explanation": 'x\n<parameter name="recommended_action">Isolate it.'},
+        "result": json.dumps({"accepted": True, "triage_id": "TRI-1",
+                              "status": "pending_analyst_review",
+                              "triage": {"explanation": "x", "recommended_action": "Isolate it.",
+                                         "confidence": 0.8}})})
+    t = summarize_turn(turn)["triages"][0]
+    assert t["recommended_action"] == "Isolate it." and t["explanation"] == "x"
+    assert t["confidence"] == 0.8 and t["event_id"] == "EV-1"

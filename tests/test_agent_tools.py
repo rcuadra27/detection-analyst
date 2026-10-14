@@ -111,3 +111,66 @@ def test_every_call_is_audited(s):
     s.call("get_event", event_id="EV-nope-1")
     lines = AUDIT_PATH.read_text().splitlines()[before:]
     assert [json.loads(l)["ok"] for l in lines] == [True, False]
+
+
+# The production failure: after a long explanation the model wrote the remaining
+# arguments as markup INSIDE the explanation text, so they arrived "missing".
+LEAKED = ('Fan-out to 33 internal hosts on port 445.\n</parameter>\n'
+          '<parameter name="recommended_action">Isolate 10.0.3.57.</parameter>\n'
+          '<parameter name="confidence">0.85</parameter>\n</invoke>\n')
+
+
+def test_submit_recovers_arguments_written_inside_the_explanation(s):
+    s.lookup_techniques(["T1210"])
+    args = triage(explanation=LEAKED)
+    del args["recommended_action"], args["confidence"]
+    r = s.submit_triage(**args)
+    assert r["accepted"], r
+    assert sorted(r["recovered_fields"]) == ["confidence", "recommended_action"]
+    assert r["triage"]["explanation"] == "Fan-out to 33 internal hosts on port 445."
+    assert r["triage"]["recommended_action"] == "Isolate 10.0.3.57."
+    assert r["triage"]["confidence"] == 0.85
+    queued = json.loads(TRIAGE_QUEUE_PATH.read_text().splitlines()[-1])
+    assert queued["recommended_action"] == "Isolate 10.0.3.57." and "<parameter" not in queued["explanation"]
+
+
+def test_a_value_sent_as_its_own_argument_wins_over_leaked_text(s):
+    s.lookup_techniques(["T1210"])
+    r = s.submit_triage(**triage(explanation=LEAKED, confidence=0.6))
+    assert r["accepted"] and r["triage"]["confidence"] == 0.6
+    assert r["triage"]["recommended_action"] == "Isolate 10.0.3.57."   # from triage(): not overwritten
+
+
+def test_missing_field_rejection_says_how_to_fix(s):
+    s.lookup_techniques(["T1210"])
+    args = triage()
+    del args["recommended_action"]
+    r = s.submit_triage(**args)
+    assert not r["accepted"] and "Missing recommended_action" in r["errors"][0]
+    assert "its own argument" in r["how_to_fix"]
+
+
+def test_explanation_that_is_only_markup_counts_as_missing(s):
+    s.lookup_techniques(["T1210"])
+    r = s.submit_triage(**triage(explanation='<parameter name="confidence">0.9</parameter>'))
+    assert not r["accepted"] and "Missing explanation" in r["errors"][0]
+
+
+def test_mcp_schema_leaves_the_checked_fields_to_submit_triage():
+    import asyncio
+    from src.agent import mcp_server
+    tool = {t.name: t for t in asyncio.run(mcp_server.mcp.list_tools())}["submit_triage"]
+    assert set(tool.inputSchema["required"]) == {"event_id", "assessment", "severity",
+                                                   "attack_technique_ids"}
+    assert list(tool.inputSchema["properties"])[-1] == "explanation"
+
+
+def test_recovery_handles_namespaced_tags_and_an_unclosed_last_argument(s):
+    s.lookup_techniques(["T1210"])
+    text = ('Fan-out.</fn:parameter>\n<fn:parameter name="recommended_action">Isolate it.'
+            '</fn:parameter>\n<fn:parameter name="confidence">0.85')
+    args = triage(explanation=text)
+    del args["recommended_action"], args["confidence"]
+    r = s.submit_triage(**args)
+    assert r["accepted"] and r["triage"]["confidence"] == 0.85
+    assert r["triage"]["explanation"] == "Fan-out." and r["triage"]["recommended_action"] == "Isolate it."

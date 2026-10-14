@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -49,6 +50,50 @@ MAX_EVENTS_LISTED = 25
 # Stage-1 false-positive rate on held-out UNSW traffic at the 0.85 threshold (README
 # §2). A benign host flags roughly this share of its flows by chance.
 DETECTOR_FALSE_POSITIVE_RATE = 0.069
+
+# The model sometimes writes its own tool-call markup INSIDE a string argument, after a
+# long explanation, so the arguments that should follow (recommended_action,
+# confidence) end up as text inside the explanation and arrive "missing". Production
+# logs showed 41 failed submit_triage calls across 6 questions from this; the framework's
+# "Field required" error did not tell the model what went wrong, so it retried blindly.
+_NS = r"(?:[\w-]+:)?"   # tags may carry a namespace prefix
+_MARKUP_START = re.compile(rf"</?{_NS}(?:parameter|invoke)\b", re.I)
+_LEAKED_ARG = re.compile(
+    rf'<{_NS}parameter\s+name="(\w+)"\s*>(.*?)'
+    rf'(?=</{_NS}parameter>|<{_NS}parameter\s|</{_NS}invoke>|$)', re.S | re.I)
+_TRIAGE_TEXT_FIELDS = ("explanation", "recommended_action", "false_positive_reason")
+_TRIAGE_SCALAR_FIELDS = {"severity", "assessment", "explanation", "recommended_action",
+                         "confidence", "false_positive_reason"}
+REQUIRED_TRIAGE_FIELDS = ("explanation", "recommended_action", "confidence")
+HOW_TO_RESUBMIT = (
+    "Call submit_triage again with every field as its own argument: event_id, assessment, "
+    "severity, attack_technique_ids, confidence (a number from 0 to 1), recommended_action "
+    "(one sentence), and explanation (2 to 4 sentences, written last). Never write another "
+    "field's value inside the explanation text.")
+
+
+def recover_leaked_arguments(args: dict) -> tuple[dict, list[str]]:
+    """Split tool-call markup out of the triage's text arguments.
+
+    Returns the arguments with the markup removed, plus the names of fields that were
+    missing and were recovered from inside another field's text. Only missing fields are
+    filled: a value the model sent as its own argument always wins."""
+    out = dict(args)
+    recovered: list[str] = []
+    for name in _TRIAGE_TEXT_FIELDS:
+        text = out.get(name)
+        if not isinstance(text, str):
+            continue
+        m = _MARKUP_START.search(text)
+        if not m:
+            continue
+        out[name] = text[:m.start()].rstrip().rstrip('"').rstrip() or None
+        for key, value in _LEAKED_ARG.findall(text[m.start():]):
+            key, value = key.lower(), value.strip().strip('"').strip()
+            if key in _TRIAGE_SCALAR_FIELDS and out.get(key) in (None, "") and value:
+                out[key] = value
+                recovered.append(key)
+    return out, recovered
 
 
 def _clock(ts: float) -> str:
@@ -346,10 +391,14 @@ class InvestigationSession:
                 "known_classes": sorted(set(GROUND_TRUTH) | set(GROUP_TECHNIQUES))}
 
     def submit_triage(self, event_id: str, severity: str, assessment: str,
-                      attack_technique_ids: list[str], explanation: str,
-                      recommended_action: str, confidence: float,
+                      attack_technique_ids: list[str], explanation: str | None = None,
+                      recommended_action: str | None = None, confidence: float | None = None,
                       false_positive_reason: str | None = None) -> dict:
-        """Validate and queue a triage for analyst review. Rejections say how to fix."""
+        """Validate and queue a triage for analyst review. Rejections say how to fix.
+
+        explanation, recommended_action and confidence are required, but they are checked
+        here rather than by the tool schema, so a missing field gets a rejection that says
+        exactly what to do instead of a bare "Field required"."""
         errors: list[str] = []
         e = self._event(event_id)
         if e is None:
@@ -358,14 +407,26 @@ class InvestigationSession:
         det = self._detection(event_id, e)
         ids = [t.strip().upper() for t in (attack_technique_ids or [])]
 
+        args, recovered = recover_leaked_arguments(dict(
+            severity=severity, assessment=assessment, explanation=explanation,
+            recommended_action=recommended_action, confidence=confidence,
+            false_positive_reason=false_positive_reason))
+        missing = [f for f in REQUIRED_TRIAGE_FIELDS if args[f] in (None, "")]
+        if missing:
+            return {"accepted": False,
+                    "errors": [f"Missing {', '.join(missing)}. Each must be sent as its own "
+                               "argument, not written inside another field."],
+                    "how_to_fix": HOW_TO_RESUBMIT}
+        false_positive_reason = args["false_positive_reason"]
+
         try:
-            triage = TriageResult(severity=severity, assessment=assessment,
-                                  attack_technique_ids=ids, explanation=explanation,
-                                  recommended_action=recommended_action,
-                                  confidence=confidence, alert_id=event_id)
+            triage = TriageResult(severity=args["severity"], assessment=args["assessment"],
+                                  attack_technique_ids=ids, explanation=args["explanation"],
+                                  recommended_action=args["recommended_action"],
+                                  confidence=args["confidence"], alert_id=event_id)
         except Exception as exc:
             return {"accepted": False, "errors": [f"Schema validation failed: {exc}"],
-                    "how_to_fix": "Fix the fields named above and resubmit."}
+                    "how_to_fix": "Fix the fields named above and resubmit. " + HOW_TO_RESUBMIT}
 
         cand_families = {_family(t) for t in det.candidate_techniques}
         not_candidate = [t for t in ids if _family(t) not in cand_families]
@@ -398,13 +459,24 @@ class InvestigationSession:
                   "submitted_at": dt.datetime.now().isoformat(timespec="seconds"),
                   "session": self.audit.session_id, "event_id": event_id,
                   "false_positive_reason": false_positive_reason,
+                  "recovered_fields": recovered,
                   **triage.model_dump(mode="json")}
         self.queue_path.parent.mkdir(parents=True, exist_ok=True)
         with self.queue_path.open("a") as fh:
             fh.write(json.dumps(record) + "\n")
-        return {"accepted": True, "triage_id": record["triage_id"],
-                "status": "pending_analyst_review",
-                "note": "Queued for an analyst. No response action has been taken."}
+        out = {"accepted": True, "triage_id": record["triage_id"],
+               "status": "pending_analyst_review",
+               "note": "Queued for an analyst. No response action has been taken.",
+               # What was actually queued, so hosts show the stored triage rather than
+               # the raw tool input.
+               "triage": {k: record[k] for k in (
+                   "severity", "assessment", "attack_technique_ids", "confidence",
+                   "explanation", "recommended_action", "false_positive_reason")}}
+        if recovered:
+            out["recovered_fields"] = recovered
+            out["format_note"] = ("Some fields arrived inside the explanation text and were "
+                                  "recovered. Next time send each field as its own argument.")
+        return out
 
     # ---------- dispatch with auditing ----------
 

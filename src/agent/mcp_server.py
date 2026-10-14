@@ -95,16 +95,20 @@ def get_attack_mapping(attack_class: str) -> dict:
 
 
 @mcp.tool()
-def submit_triage(event_id: str, severity: str, assessment: str,
-                  attack_technique_ids: list[str], explanation: str,
-                  recommended_action: str, confidence: float,
-                  false_positive_reason: str | None = None) -> dict:
+def submit_triage(event_id: str, assessment: str, severity: str,
+                  attack_technique_ids: list[str], confidence: float | None = None,
+                  recommended_action: str | None = None,
+                  false_positive_reason: str | None = None,
+                  explanation: str | None = None) -> dict:
     """Submit the final triage for an event. It is validated and queued for analyst review;
-    no response action is taken. severity: low|medium|high|critical. assessment:
-    true_positive|false_positive|inconclusive. attack_technique_ids: only candidates from
-    get_event whose documentation you retrieved. confidence: 0-1. A false_positive on a
-    high-scoring event needs false_positive_reason citing tool evidence. If rejected,
-    read the errors, fix, and resubmit."""
+    no response action is taken. assessment: true_positive|false_positive|inconclusive.
+    severity: low|medium|high|critical. attack_technique_ids: only candidates from
+    get_event whose documentation you retrieved. confidence (required): 0-1.
+    recommended_action (required): one sentence. explanation (required): 2 to 4
+    sentences, sent last. Send every field as its own argument; never put one field's
+    value inside another's text. A false_positive on a high-scoring event needs
+    false_positive_reason citing tool evidence. If rejected, read the errors, fix, and
+    resubmit."""
     return session().call("submit_triage", event_id=event_id, severity=severity,
                           assessment=assessment, attack_technique_ids=attack_technique_ids,
                           explanation=explanation, recommended_action=recommended_action,
