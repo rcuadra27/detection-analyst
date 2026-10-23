@@ -354,12 +354,17 @@ src/
 │   ├── diagnose_retrieval.py  per-class retrieval miss analysis
 │   ├── run_eval.py        harness for the old similarity-retrieval architecture
 │   └── run_eval_hybrid.py harness for the current hybrid pipeline
-└── pcap/
-    ├── extract.py         streaming pcap -> flows with payload-derived text
-    └── label.py           ground-truth join by 5-tuple + time window
+├── pcap/
+│   ├── extract.py         streaming pcap -> flows with payload-derived text
+│   └── label.py           ground-truth join by 5-tuple + time window
+└── ingest/                Phase A: score any pcap (docs/parity.md)
+    ├── zeek/unsw_features.zeek  per-connection TTL, window, ISN, timing, retransmissions
+    ├── zeek_run.py        runs Zeek on a pcap, loads JSON logs
+    ├── features.py        Zeek logs -> the detector's 42 features, with provenance
+    └── parity.py          Zeek vs UNSW features on the same flows, detector agreement
 
 .claude/skills/            investigate-event, disambiguate-hypotheses, write-incident-report
-tests/                     61 pytest tests (no API key)
+tests/                     107 pytest tests (no API key; ingest tests on a synthetic pcap need Zeek)
 docs/                      architecture diagram + example triage visuals
 data/scenario/             pre-scored dev investigation day (flows.jsonl, meta.json, truth.json)
 data/scenario_heldout/     held-out day v1, same files
