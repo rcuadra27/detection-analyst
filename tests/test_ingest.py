@@ -48,6 +48,17 @@ def test_normalize_service_variants():
     assert F.normalize_service("krb", 88, "zeek_port") == "-"
 
 
+def test_loss_variants_match_unsw_counting_rule():
+    # flows: clean / one data resend / repeated FIN only / one data resend + repeated FINs
+    rt = pd.Series([0, 1, 0, 1]); gp = pd.Series([0, 0, 0, 0]); zd = pd.Series([0, 0, 2, 2])
+    v = F.loss_variants(rt, gp, zd)
+    assert v["retrans"].tolist() == [0, 1, 0, 1]
+    assert v["retrans_plus1"].tolist() == [0, 2, 0, 2]
+    # UNSW on the dev capture: 0, 2, 1, 2
+    assert v["plus1_any"].tolist() == [0, 2, 1, 2]
+    assert set(v) == set(F.VARIANTS["loss"])
+
+
 def _ct_frame():
     # four connections, one of them ends late
     return pd.DataFrame({
@@ -267,6 +278,7 @@ def test_zeek_loss_candidates(zeek_features):
     assert b["sloss@retrans_zero"] == 2
     assert b["sloss@all"] == 3
     assert b["sloss@retrans_plus1"] == 2
+    assert b["sloss@plus1_any"] == 2         # one data resend, FIN repeated
     assert b["dloss@all"] == 0
     # the HTTP flow has one retransmission and no hole or repeated SYN/FIN
     h = base[base["dsport"] == 80].iloc[0]

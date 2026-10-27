@@ -85,7 +85,10 @@ VARIANTS = {
     "window": ["end_self", "end_noself", "start_self", "start_noself"],
     # sloss/dloss: UNSW says "retransmitted or dropped". Candidates add the
     # sequence holes (dropped), repeated SYN/FIN, or one extra per lossy flow.
-    "loss":   ["retrans", "retrans_gaps", "retrans_zero", "all", "retrans_plus1"],
+    # plus1_any (added after run 1, from the dev capture): data resends plus
+    # one if anything at all was resent, data or SYN/FIN.
+    "loss":   ["retrans", "retrans_gaps", "retrans_zero", "all", "retrans_plus1",
+               "plus1_any"],
 }
 DEFAULT_CHOICE = {k: v[0] for k, v in VARIANTS.items()}
 
@@ -145,6 +148,26 @@ def normalize_service(svc, dport: int, variant: str) -> str:
     return out
 
 
+# ---------------------------------------------------------------- loss
+
+def loss_variants(retrans: pd.Series, gaps: pd.Series, zero_dup: pd.Series) -> dict:
+    """Candidate sloss/dloss values from the Zeek script's loss evidence.
+
+    Run 1 on the dev capture showed UNSW's count is data resends plus one
+    whenever anything was resent: the original packet is counted along with
+    its resends, and a flow that only repeated a SYN or FIN counts 1.
+    """
+    any_resend = ((retrans > 0) | (zero_dup > 0)).astype(int)
+    return {
+        "retrans": retrans,
+        "retrans_gaps": retrans + gaps,
+        "retrans_zero": retrans + zero_dup,
+        "all": retrans + gaps + zero_dup,
+        "retrans_plus1": retrans + (retrans > 0).astype(int),
+        "plus1_any": retrans + any_resend,
+    }
+
+
 # ---------------------------------------------------------------- base table
 
 def _num(df: pd.DataFrame, col: str, default=0.0) -> pd.Series:
@@ -201,14 +224,11 @@ def build_base(logs: dict[str, pd.DataFrame]) -> pd.DataFrame:
         b[f"{side}inpkt"] = _num(j, f"{side}_ipt_mean_ms")
         b[f"{side}jit@std"] = _num(j, f"{side}_ipt_std_ms")
         b[f"{side}jit@mad"] = _num(j, f"{side}_ipt_mad_ms")
-        rt = _num(j, f"{side}_retrans").astype(int)
-        gp = _num(j, f"{side}_gaps").astype(int)
-        zd = _num(j, f"{side}_zero_dup").astype(int)
-        b[f"{side}loss@retrans"] = rt
-        b[f"{side}loss@retrans_gaps"] = rt + gp
-        b[f"{side}loss@retrans_zero"] = rt + zd
-        b[f"{side}loss@all"] = rt + gp + zd
-        b[f"{side}loss@retrans_plus1"] = rt + (rt > 0).astype(int)
+        cands = loss_variants(_num(j, f"{side}_retrans").astype(int),
+                              _num(j, f"{side}_gaps").astype(int),
+                              _num(j, f"{side}_zero_dup").astype(int))
+        for v, col in cands.items():
+            b[f"{side}loss@{v}"] = col
     b["synack"] = _num(j, "synack")
     b["ackdat"] = _num(j, "ackdat")
     b["ct_ftp_cmd"] = _num(j, "ftp_cmds").astype(int)

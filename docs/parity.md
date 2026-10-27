@@ -52,7 +52,7 @@ adapter computes each candidate and the experiment picks one:
 | body | sum or max of HTTP response bodies |
 | mthd | GET/POST requests, any request |
 | window | ordered by end or start time, counting the connection itself or not |
-| loss | retransmissions; plus sequence holes; plus repeated SYN/FIN; all three; plus one per lossy flow (added after run 1) |
+| loss | retransmissions; plus sequence holes; plus repeated SYN/FIN; all three; plus one per lossy flow; data resends plus one if anything was resent (added after run 1) |
 | rate | (spkts+dpkts-1)/dur or (spkts+dpkts)/dur, checked against the training CSV |
 
 The choice is made on **capture A** and every reported number comes from
@@ -173,3 +173,22 @@ UNSW 1: 2,142 flows; 1/2: 2,191; 2/3: 2,943; 3/4: 1,886; 4/5: 484).
    SYN/FIN, or both. Calibrated on capture 1 like the others.
 2. A flow path for other IP protocols, so coverage can be measured again.
 3. One validation of both fixes on a capture not yet used, same thresholds.
+
+### Dev check after the loss candidates (capture 10)
+
+Calibration on capture 1 chose `retrans_plus1` (0.944 vs 0.25 for the rest),
+and `sloss` agreement on capture 10 rose from 28.6% to 94.3%. FPR did not
+move: 0.0148, and the `sloss` swap-one FPR stayed at exactly 0.0099.
+
+- Sequence holes were not UNSW's "dropped": `retrans_gaps` equals `retrans`
+  on every flow (no holes in the capture).
+- The +1 is the original packet: UNSW counts it along with its resends.
+- The 2,142 flows still at Zeek 0 / UNSW 1 all have a repeated SYN or FIN and
+  no data resend. UNSW counts those as 1 however many repeats.
+- The detector mostly reads `sloss` as zero or not zero. Fixing the ~9,500
+  flows that were off by one above zero changed no decisions; the 2,142 flows
+  wrong about zero carry the false positives.
+
+Added `plus1_any`: data resends, plus one if anything was resent. Derived on
+the dev capture; still chosen by calibration on capture 1 and validated on an
+unused capture.
