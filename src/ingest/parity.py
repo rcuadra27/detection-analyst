@@ -65,6 +65,7 @@ GROUP_FEATURES = {
     "service": ["service"],
     "body": ["response_body_len"],
     "mthd": ["ct_flw_http_mthd"],
+    "loss": ["sloss", "dloss"],
     "window": ["ct_srv_src", "ct_srv_dst", "ct_dst_ltm", "ct_src_ltm",
                "ct_src_dport_ltm", "ct_dst_sport_ltm", "ct_dst_src_ltm"],
 }

@@ -198,9 +198,9 @@ def _row(feats, dport, l4="tcp"):
 
 
 @needs_zeek
-def test_zeek_sees_all_four_connections(zeek_features):
+def test_zeek_sees_all_five_connections(zeek_features):
     _, _, feats = zeek_features
-    assert len(feats) == 4
+    assert len(feats) == 5
     assert list(feats.columns) == F.META + F.UNSW_FEATURES
 
 
@@ -258,6 +258,23 @@ def test_zeek_ftp_login_and_commands(zeek_features):
 
 
 @needs_zeek
+def test_zeek_loss_candidates(zeek_features):
+    from tests.pcap_fixtures import LOSSY
+    _, base, feats = zeek_features
+    b = base[base["dsport"] == LOSSY["dport"]].iloc[0]
+    assert b["sloss@retrans"] == 1
+    assert b["sloss@retrans_gaps"] == 2
+    assert b["sloss@retrans_zero"] == 2
+    assert b["sloss@all"] == 3
+    assert b["sloss@retrans_plus1"] == 2
+    assert b["dloss@all"] == 0
+    # the HTTP flow has one retransmission and no hole or repeated SYN/FIN
+    h = base[base["dsport"] == 80].iloc[0]
+    assert (h["sloss@retrans"], h["sloss@all"], h["sloss@retrans_plus1"]) == (1, 1, 2)
+    assert F.select(base, {"loss": "all"}).set_index("dsport").loc[LOSSY["dport"], "sloss"] == 3
+
+
+@needs_zeek
 def test_zeek_window_counts_over_capture(zeek_features):
     _, _, feats = zeek_features
     # default variant: ordered by end time, self included
@@ -274,7 +291,7 @@ def test_parity_end_to_end_on_fixture(zeek_features, tmp_path):
     u = sel.rename(columns={"l4": "proto_l4"}).copy()
     u["stime"] = np.floor(sel["ts"])
     u["ltime"] = np.floor(sel["end_ts"])
-    u["attack_cat"] = ["normal", "normal", "exploits", "normal"]
+    u["attack_cat"] = ["exploits" if p == 22 else "normal" for p in sel["dsport"]]
     u["label"] = (u["attack_cat"] != "normal").astype(int)
     rows = u[[c for c in P.FULL_COLS]]
     rows.to_csv(tmp_path / "UNSW-NB15_x.csv", header=False, index=False)

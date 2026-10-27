@@ -103,8 +103,44 @@ def _ftp_login():
     return pk
 
 
+LOSSY = {"sport": 40200, "dport": 9000, "src": "10.0.0.7", "seg": 100}
+
+
+def _lossy_flow():
+    """One data segment never reaches the sensor (a hole), one segment is
+    retransmitted, and the client's FIN is sent twice.
+
+    Expected client-side loss evidence: retrans 1, gaps 1, zero_dup 1.
+    """
+    c = _Side(LOSSY["src"], LOSSY["sport"], 30000, 64, 29200)
+    s = _Side(SERVER, LOSSY["dport"], 40000, 64, 65535)
+    n = LOSSY["seg"]
+    data = b"x" * n
+    t = 5.0
+    pk = []
+    def add(src, dst, flags, payload=b"", seq=None):
+        nonlocal t
+        pk.append(_seg(src, dst, flags, t, payload, seq=seq))
+        t += 0.01
+    add(c, s, "S"); c.seq += 1
+    add(s, c, "SA"); s.seq += 1
+    add(c, s, "A")
+    first = c.seq
+    add(c, s, "PA", data)                      # segment 1
+    add(c, s, "PA", data, seq=first + 2 * n)   # segment 3: segment 2 never seen (gap)
+    add(c, s, "PA", data, seq=first + 2 * n)   # segment 3 again (retransmission)
+    c.seq = first + 3 * n
+    fin = c.seq
+    add(c, s, "FA", seq=fin)
+    add(c, s, "FA", seq=fin)                   # FIN repeated
+    c.seq += 1
+    add(s, c, "FA"); s.seq += 1
+    add(c, s, "A")
+    return pk
+
+
 def write_fixture(path: str | Path) -> Path:
-    pkts = _http_flow() + _dns_oneway() + _syn_noreply() + _ftp_login()
+    pkts = _http_flow() + _dns_oneway() + _syn_noreply() + _ftp_login() + _lossy_flow()
     pkts.sort(key=lambda p: float(p.time))
     wrpcap(str(path), pkts)
     return Path(path)

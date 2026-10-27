@@ -49,9 +49,18 @@ export {
 		d_ipt_mean_ms:     double &log &optional;
 		d_ipt_std_ms:      double &log &optional;
 		d_ipt_mad_ms:      double &log &optional;
-		## Data packets whose bytes were already seen in that direction.
+		## Loss evidence per direction. UNSW defines sloss/dloss as packets
+		## "retransmitted or dropped", which a capture shows several ways:
+		## retrans:  data segments whose bytes were already seen
+		## gaps:     data segments that start past the highest byte seen, i.e.
+		##           a hole where a segment never reached the sensor
+		## zero_dup: repeated SYN or FIN segments (no payload, so not in retrans)
 		s_retrans:         count  &log &default=0;
 		d_retrans:         count  &log &default=0;
+		s_gaps:            count  &log &default=0;
+		d_gaps:            count  &log &default=0;
+		s_zero_dup:        count  &log &default=0;
+		d_zero_dup:        count  &log &default=0;
 		## Handshake timing, seconds. synack: SYN -> SYN/ACK.
 		## ackdat: SYN/ACK -> first ACK from the originator.
 		synack:            double &log &optional;
@@ -81,6 +90,10 @@ type DirState: record {
 	seq_hi:      count  &default=0;
 	seq_seen:    bool   &default=F;
 	retrans:     count  &default=0;
+	gaps:        count  &default=0;
+	zero_dup:    count  &default=0;
+	syn_seen:    bool   &default=F;
+	fin_seen:    bool   &default=F;
 };
 
 type ConnState: record {
@@ -96,6 +109,7 @@ type ConnState: record {
 
 global states: table[string] of ConnState;
 
+const TH_FIN = 1;
 const TH_SYN = 2;
 const TH_ACK = 16;
 
@@ -157,9 +171,24 @@ function update_dir(d: DirState, p: pkt_hdr)
 	if ( ! d?$isn )
 		d$isn = p$tcp$seq;
 
+	# Repeated SYN or FIN: a control segment sent again.
+	if ( (p$tcp$flags & TH_SYN) != 0 )
+		{
+		if ( d$syn_seen )
+			d$zero_dup += 1;
+		d$syn_seen = T;
+		}
+	if ( (p$tcp$flags & TH_FIN) != 0 )
+		{
+		if ( d$fin_seen )
+			d$zero_dup += 1;
+		d$fin_seen = T;
+		}
+
 	# Retransmission: a data segment ending at or before the highest byte
-	# already seen in this direction. Sequence wraparound is ignored, which
-	# only matters for flows that move ~4 GB.
+	# already seen in this direction. Gap: a data segment starting beyond it.
+	# Sequence wraparound is ignored, which only matters for flows that move
+	# ~4 GB.
 	if ( p$tcp$dl > 0 )
 		{
 		local seq_end = p$tcp$seq + p$tcp$dl;
@@ -167,6 +196,8 @@ function update_dir(d: DirState, p: pkt_hdr)
 			d$retrans += 1;
 		else
 			{
+			if ( d$seq_seen && p$tcp$seq > d$seq_hi )
+				d$gaps += 1;
 			d$seq_hi = seq_end;
 			d$seq_seen = T;
 			}
@@ -218,6 +249,8 @@ event connection_state_remove(c: connection)
 
 	local rec = Info($ts=c$start_time, $uid=c$uid,
 	                 $s_retrans=st$o$retrans, $d_retrans=st$r$retrans,
+	                 $s_gaps=st$o$gaps, $d_gaps=st$r$gaps,
+	                 $s_zero_dup=st$o$zero_dup, $d_zero_dup=st$r$zero_dup,
 	                 $ftp_cmds=st$ftp_cmds,
 	                 $ftp_login=(st$ftp_user && st$ftp_pass));
 

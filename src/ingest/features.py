@@ -83,6 +83,9 @@ VARIANTS = {
     "body":   ["sum", "max"],             # response_body_len over transactions
     "mthd":   ["getpost", "any"],         # ct_flw_http_mthd
     "window": ["end_self", "end_noself", "start_self", "start_noself"],
+    # sloss/dloss: UNSW says "retransmitted or dropped". Candidates add the
+    # sequence holes (dropped), repeated SYN/FIN, or one extra per lossy flow.
+    "loss":   ["retrans", "retrans_gaps", "retrans_zero", "all", "retrans_plus1"],
 }
 DEFAULT_CHOICE = {k: v[0] for k, v in VARIANTS.items()}
 
@@ -198,7 +201,14 @@ def build_base(logs: dict[str, pd.DataFrame]) -> pd.DataFrame:
         b[f"{side}inpkt"] = _num(j, f"{side}_ipt_mean_ms")
         b[f"{side}jit@std"] = _num(j, f"{side}_ipt_std_ms")
         b[f"{side}jit@mad"] = _num(j, f"{side}_ipt_mad_ms")
-        b[f"{side}loss"] = _num(j, f"{side}_retrans").astype(int)
+        rt = _num(j, f"{side}_retrans").astype(int)
+        gp = _num(j, f"{side}_gaps").astype(int)
+        zd = _num(j, f"{side}_zero_dup").astype(int)
+        b[f"{side}loss@retrans"] = rt
+        b[f"{side}loss@retrans_gaps"] = rt + gp
+        b[f"{side}loss@retrans_zero"] = rt + zd
+        b[f"{side}loss@all"] = rt + gp + zd
+        b[f"{side}loss@retrans_plus1"] = rt + (rt > 0).astype(int)
     b["synack"] = _num(j, "synack")
     b["ackdat"] = _num(j, "ackdat")
     b["ct_ftp_cmd"] = _num(j, "ftp_cmds").astype(int)
@@ -334,7 +344,8 @@ def select(base: pd.DataFrame, choice: dict | None = None,
 
     f["sttl"] = base[f"sttl@{c['ttl']}"]
     f["dttl"] = base[f"dttl@{c['ttl']}"]
-    f["sloss"], f["dloss"] = base["sloss"], base["dloss"]
+    f["sloss"] = base[f"sloss@{c['loss']}"]
+    f["dloss"] = base[f"dloss@{c['loss']}"]
     f["sinpkt"], f["dinpkt"] = base["sinpkt"], base["dinpkt"]
     f["sjit"] = base[f"sjit@{c['jit']}"]
     f["djit"] = base[f"djit@{c['jit']}"]
