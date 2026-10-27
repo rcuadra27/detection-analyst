@@ -52,6 +52,7 @@ adapter computes each candidate and the experiment picks one:
 | body | sum or max of HTTP response bodies |
 | mthd | GET/POST requests, any request |
 | window | ordered by end or start time, counting the connection itself or not |
+| loss | retransmissions; plus sequence holes; plus repeated SYN/FIN; all three; plus one per lossy flow (added after run 1) |
 | rate | (spkts+dpkts-1)/dur or (spkts+dpkts)/dur, checked against the training CSV |
 
 The choice is made on **capture A** and every reported number comes from
@@ -107,3 +108,68 @@ Output in `data/processed/parity/`: `parity_report.md`, `parity.json`,
 
 The pcaps must come from the period the CSVs cover; matching uses the 5-tuple
 and start time.
+
+## Run 1 results (calibrate on 1.pcap, validate on 10.pcap)
+
+Recorded before any fix. Capture 10 becomes the dev capture from here on; the
+post-fix validation runs on a capture not yet looked at.
+
+**Verdict: Fail, on coverage.** The detector criteria pass on the flows Zeek
+produced; the coverage criterion does not.
+
+| criterion | threshold | result | |
+|---|---|---|---|
+| decision agreement | >= 95% | 98.3% | pass |
+| recall change | within 3 points | 0.795 -> 0.780 | pass |
+| FPR change | within 2 points | 0.0005 -> 0.0148 | pass |
+| attack coverage | >= 90%, each major class | 81% overall; exploits 79%, dos 54%, backdoor 48%, fuzzers 87%, generic 86% | **fail** |
+
+**A flaw in the rule.** It names retraining as the remedy for Fail, but no
+model can score a flow Zeek never produces. Coverage and feature drift are
+separate problems with separate fixes.
+
+### Coverage
+
+UNSW records with an IP protocol other than TCP, UDP or ICMP were 0% matched
+(OSPF, ARP, SCTP, and a tail of rare protocols). Across the whole dataset:
+
+| | normal | attack | attack share |
+|---|---|---|---|
+| TCP/UDP/ICMP | 2,204,099 | 281,934 | 11% |
+| other protocols | 14,665 | 39,349 | 73% |
+
+Not an artifact to drop. The normal side is ordinary ARP and OSPF; the attack
+side looks like IP protocol sweeps (in capture 10, mobile, pim, sun-nd and
+swipe have exactly 22 records each), which is a real reconnaissance technique.
+These are 12% of all UNSW attacks. It also means `proto` partly encodes the
+label in UNSW, so the detector likely leans on it more than it would on a real
+network.
+
+### False positives: one feature
+
+FPR rose about 30x in relative terms. Swap-one puts most of it on `sloss`:
+replacing only UNSW's value with Zeek's takes FPR from 0.0005 to 0.0099. No
+other single feature moves it past 0.0011.
+
+The cause was a definition error. UNSW defines sloss as packets "retransmitted
+or dropped"; the first version counted retransmissions only. Zeek against UNSW
+on capture 10 is a diagonal shifted by one wherever UNSW sees loss (Zeek 0 /
+UNSW 1: 2,142 flows; 1/2: 2,191; 2/3: 2,943; 3/4: 1,886; 4/5: 484).
+
+### Other observations
+
+- The worst-agreeing features barely move the detector: `swin`/`dwin` agree
+  28.5% and `ct_src_ltm` 3.7%, yet each swap keeps decision agreement >= 99.8%.
+- `dur` agrees 69.8%, and `sload`/`dload`, which divide by it, 6-9%. This is the
+  close-at-FIN difference found on the synthetic pcap.
+- Calibration was decisive where it mattered: IP bytes 93.7% vs payload 0.8%,
+  last-packet TTL 100% vs first 8.4%. The three window options tied at 23.6%,
+  so none of them is UNSW's definition.
+- Single swaps add up to less than the full Zeek effect, so features interact.
+
+### Next
+
+1. `sloss`/`dloss` candidates: retransmissions plus sequence holes, repeated
+   SYN/FIN, or both. Calibrated on capture 1 like the others.
+2. A flow path for other IP protocols, so coverage can be measured again.
+3. One validation of both fixes on a capture not yet used, same thresholds.
