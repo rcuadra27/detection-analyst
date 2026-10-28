@@ -253,3 +253,34 @@ counted against the wrong records.
 - Same decision rule as above, unchanged.
 - No code change between seeing the capture 20 result and recording it. The
   result goes into this file and the README whichever way it lands.
+
+## Validation run 1 (calibrate on capture 1, validate on capture 20): inconclusive
+
+Every UNSW record in capture 20's time span is labelled normal: 0 attacks in
+21,135 records. Attack recall and per-class attack coverage cannot be
+measured, so under the protocol above this run is neither a pass nor a fail.
+The capture was chosen without checking its attack content, which the UNSW CSV
+alone would have shown. No code was changed after seeing the result.
+
+What it does show, on traffic no fix was built from:
+
+| | result |
+|---|---|
+| decision agreement | 100% on 20,540 benign flows |
+| FPR, UNSW features -> Zeek features | 0.0 -> 0.0 |
+| coverage (all normal) | 98.8%; distinct flows 99.4% |
+| sloss / sbytes / spkts agreement | 99.4% / 99.6% / 99.8% |
+| sttl, dttl, stcpb, dtcpb, state, service | 99.9-100% |
+
+- The weak features are the same, at the same sizes, as on captures 1 and 10
+  (window counts 1-41%, swin 28%, sjit 28%): consistent definitional
+  differences, not noise.
+- OSPF matched 0 of 64 records (100% on capture 10). Likely phase: Argus's
+  60 s records began before this capture started, so their boundaries do not
+  line up with flows that start at the capture's first packet.
+- ARP 81% (120 of 148), as on the dev capture.
+
+**Selection rule for the next validation capture (set before choosing):** it
+must contain at least 500 attack records within its time span according to the
+UNSW CSV, checked from the CSV only, before the capture goes through any part
+of the pipeline. Thresholds and protocol are otherwise unchanged.
