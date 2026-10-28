@@ -4,12 +4,14 @@ Fields are from `get_host_activity` (`outbound.*`, `noise_check.*`, `inbound.*`)
 
 ## Step 0, always first: is this attack traffic or detector noise?
 
-The detector flags about 7% of benign flows (`noise_check.detector_false_positive_rate`). A busy benign host therefore produces flagged flows by chance, and those flagged flows can form any pattern: many internal hosts, one port, a few minutes. **The pattern of the flagged flows says nothing until you know they are more than noise.**
+The detector flags a small share of benign flows by chance: `noise_check.detector_false_positive_rate`, about 7% on the simulated days and usually far lower on an uploaded capture, which gets its own estimate (`noise_check.false_positive_rate_source` says which). A busy benign host therefore produces flagged flows by chance, and those flagged flows can form any pattern: many internal hosts, one port, a few minutes. **The pattern of the flagged flows says nothing until you know they are more than noise.**
 
-| `noise_check.suspicious_fraction_in_active_windows` | Meaning | What to do |
+| `noise_check.times_false_positive_rate` | Meaning | What to do |
 |---|---|---|
-| < 0.2 (under ~3x the false-positive rate) | Consistent with detector noise | Go to **Detector noise** below. Do NOT apply the fan-out or persistent-channel rules. |
-| >= 0.2 | More than noise: a real share of the host's traffic looks like attack traffic | Apply the pair rules below |
+| < 3 (flagged share under 3x the false-positive rate) | Consistent with detector noise | Go to **Detector noise** below. Do NOT apply the fan-out or persistent-channel rules. |
+| >= 3 | More than noise: a real share of the host's traffic looks like attack traffic | Apply the pair rules below |
+
+Use the ratio, not a fixed share: the rate differs between datasets, so the same share can be noise in one and far above chance in another.
 
 Do not explain a low fraction away (e.g. "the rest is just background traffic"). That background traffic is exactly what makes the flagged share look like chance.
 
@@ -40,7 +42,7 @@ Check request-rate context. One destination with a very high flow count in a sho
 ## Detector noise (any class, any pattern)
 Correlation can pass clustered false positives as an event (Phase 4 simulation). Step 0 decides this, not the shape of the flagged flows. It applies whether the flagged flows go to one destination or many, on one port or several, and whatever class the detector's hypotheses name: the class describes what the flagged flows resemble, not whether they are real.
 
-When `noise_check.suspicious_fraction_in_active_windows` < 0.2:
+When `noise_check.times_false_positive_rate` < 3:
 - assessment `inconclusive`, severity `low`; or `false_positive` with a `false_positive_reason` that lists the noise-check numbers
 - raise severity to `medium` only if `inbound.suspicious_flows` > 0 (the host may itself have been attacked)
 - do not raise severity for internal-to-internal traffic; that rule is for confirmed attacks

@@ -48,7 +48,10 @@ MAX_DESCRIPTION_CHARS = 1500
 MAX_IDS_PER_LOOKUP = 8
 MAX_EVENTS_LISTED = 25
 # Stage-1 false-positive rate on held-out UNSW traffic at the 0.85 threshold (README
-# §2). A benign host flags roughly this share of its flows by chance.
+# §2). A benign host flags roughly this share of its flows by chance. This is the
+# default for the simulated days, which sample that test split. A store built from
+# an uploaded pcap carries its own estimate in meta.json (src/ingest/baseline.py):
+# on real captures scored through Zeek the benign rate was 0.1-0.3%, not 6.9%.
 DETECTOR_FALSE_POSITIVE_RATE = 0.069
 
 # The model sometimes writes its own tool-call markup INSIDE a string argument, after a
@@ -314,6 +317,9 @@ class InvestigationSession:
         active = set(windows)
         in_active = [f for f in out_flows if int(f.timestamp // 300) in active]
         frac_active = len(sus) / max(len(in_active), 1)
+        fpr = float(self.store.meta.get("false_positive_rate") or DETECTOR_FALSE_POSITIVE_RATE)
+        fpr_source = self.store.meta.get("false_positive_rate_source",
+                                         "measured on UNSW's held-out test split")
         return {
             "host": host,
             "host_is_internal": is_internal(host),
@@ -337,14 +343,17 @@ class InvestigationSession:
             "noise_check": {
                 "flows_in_active_windows": len(in_active),
                 "suspicious_fraction_in_active_windows": round(frac_active, 3),
-                "detector_false_positive_rate": DETECTOR_FALSE_POSITIVE_RATE,
-                "times_false_positive_rate": round(frac_active / DETECTOR_FALSE_POSITIVE_RATE, 1),
+                "detector_false_positive_rate": round(fpr, 6),
+                "false_positive_rate_source": fpr_source,
+                "times_false_positive_rate": round(frac_active / fpr, 1),
+                "flagged_expected_by_chance": round(len(in_active) * fpr, 1),
                 "how_to_read": (
-                    "The detector flags about 7% of benign flows. If the host's suspicious "
-                    "share in its active windows is close to that, the flagged flows are "
-                    "consistent with detector noise, whatever pattern (fan-out, beaconing) "
-                    "they form. A share far above it means most of what the host sent "
-                    "in those windows looked like attack traffic."),
+                    f"In this data the detector flags about {fpr:.2%} of benign flows "
+                    f"({fpr_source}). If the host's suspicious share in its active windows "
+                    "is within about 3 times that rate, the flagged flows are consistent "
+                    "with detector noise, whatever pattern (fan-out, beaconing) they form. "
+                    "A share far above it means much more of what the host sent looked "
+                    "like attack traffic than chance explains."),
             },
             "inbound": {
                 "total_flows": len(in_flows),
