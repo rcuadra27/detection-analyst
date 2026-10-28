@@ -284,3 +284,46 @@ What it does show, on traffic no fix was built from:
 must contain at least 500 attack records within its time span according to the
 UNSW CSV, checked from the CSV only, before the capture goes through any part
 of the pipeline. Thresholds and protocol are otherwise unchanged.
+
+**Capture labels.** UNSW-NB15 has two capture days, and both pcap folders
+number their files from 1. Captures 1 and 10 above are from the 17-2-2015
+folder (timestamps 18 Feb 2015 UTC). The capture 20 of validation run 1 was
+from the 22-1-2015 folder; on that day UNSW ran attacks only in the first two
+hours, which is why it had none. Validation run 2 uses capture 20 from the
+17-2-2015 folder.
+
+## Validation run 2 (calibrate on capture 1, validate on 17-2-2015 capture 20): Fail on coverage
+
+Selection rule: 13,008 attack records in the capture's span by the UNSW CSV
+(>= 500 required). The timestamp check was not run beforehand; the count comes
+from the CSV alone and does not depend on the pipeline.
+
+| criterion | threshold | result | |
+|---|---|---|---|
+| decision agreement | >= 95% | 99.5% (40,747 flows, 2,157 attacks) | pass |
+| recall change | within 3 points | 0.853 -> 0.846 | pass |
+| FPR change | within 2 points | 0.0033 -> 0.0012 | pass |
+| coverage, each major attack class | >= 90% | generic 6.7% (403 / 5,983); others 98.4-100% | **fail** |
+
+The rule was written when coverage meant UNSW records, so the verdict uses
+records. Distinct-flow coverage is 98.1%; it is reported, not substituted.
+
+**The detector side holds on unseen traffic.** Decisions agree on 99.5% of
+flows, recall is within a point, and FPR is lower with Zeek's features than
+with UNSW's. The calibrated definitions carried over (sloss 99.9%, sbytes
+95.6%, TTLs and ISNs 100%). No single remaining mismatch moves decision
+agreement by more than 0.3 points. The model can score Zeek-built features
+without retraining.
+
+**The coverage failure is concentrated.** UDP coverage is 47.4% against 99.8%
+for TCP. 59,138 records are 41,532 distinct flows; the uncovered records sit in
+roughly 800 flows written about 16 times each, nearly all labelled generic.
+Hypothesis (not yet checked): repeated UDP bursts on one 5-tuple. Zeek keeps a
+UDP connection open until it has been idle for a minute, so the bursts merge
+into one connection that starts at the first burst; Argus wrote a record per
+burst, and later bursts find no Zeek connection with a matching start time. If
+so, the traffic is seen but segmented differently, and the fix is UDP
+segmentation, not retraining.
+
+Any fix for this is built and checked on captures already used, and validated
+on a new capture chosen by the same selection rule.
