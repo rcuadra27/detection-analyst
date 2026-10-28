@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 SCRIPT = Path(__file__).parent / "zeek" / "unsw_features.zeek"
-LOGS = ("conn", "http", "ftp", "unsw")
+LOGS = ("conn", "http", "ftp", "unsw", "other")
 
 
 class ZeekNotFound(RuntimeError):

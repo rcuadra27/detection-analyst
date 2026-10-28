@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scapy.all import IP, TCP, UDP, DNS, DNSQR, Raw, wrpcap
+from scapy.all import ARP, DNS, DNSQR, IP, TCP, UDP, Ether, Padding, Raw, wrpcap
 
 T0 = 1_400_000_000.0   # UNSW-era epoch seconds
 
@@ -139,8 +139,44 @@ def _lossy_flow():
     return pk
 
 
+# Non-TCP/UDP/ICMP traffic, grouped by the Python side (src/ingest/other.py)
+OSPF = {"src": "10.0.0.1", "dst": "224.0.0.5", "times": [10.0, 20.0, 30.0], "len": 64}
+SCTP = {"a": "175.45.176.1", "b": "149.171.126.17", "len": 76}
+GARP = {"ip": "10.0.0.40"}
+
+
+def _other_protocols():
+    pk = []
+    for t in OSPF["times"]:
+        p = IP(src=OSPF["src"], dst=OSPF["dst"], proto=89, ttl=1) / Raw(b"o" * (OSPF["len"] - 20))
+        p.time = T0 + t
+        pk.append(p)
+    for i, (src, dst, ttl) in enumerate([(SCTP["a"], SCTP["b"], 254), (SCTP["b"], SCTP["a"], 60),
+                                         (SCTP["a"], SCTP["b"], 254), (SCTP["b"], SCTP["a"], 60)]):
+        p = IP(src=src, dst=dst, proto=132, ttl=ttl) / Raw(b"s" * (SCTP["len"] - 20))
+        p.time = T0 + 40.0 + 0.01 * i
+        pk.append(p)
+    # gratuitous ARP, padded to the 60-byte Ethernet minimum: 46-byte payload
+    arp = (Ether(dst="ff:ff:ff:ff:ff:ff", src="02:00:00:00:00:28")
+           / ARP(op=1, psrc=GARP["ip"], pdst=GARP["ip"], hwsrc="02:00:00:00:00:28")
+           / Padding(b"\x00" * 18))
+    arp.time = T0 + 50.0
+    pk.append(arp)
+    return pk
+
+
+def _ether(p):
+    if p.haslayer(Ether):
+        return p
+    e = Ether(src="02:00:00:00:00:01", dst="02:00:00:00:00:02") / p
+    e.time = p.time
+    return e
+
+
 def write_fixture(path: str | Path) -> Path:
-    pkts = _http_flow() + _dns_oneway() + _syn_noreply() + _ftp_login() + _lossy_flow()
+    pkts = (_http_flow() + _dns_oneway() + _syn_noreply() + _ftp_login() + _lossy_flow()
+            + _other_protocols())
+    pkts = [_ether(p) for p in pkts]
     pkts.sort(key=lambda p: float(p.time))
     wrpcap(str(path), pkts)
     return Path(path)

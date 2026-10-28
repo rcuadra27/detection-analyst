@@ -59,6 +59,43 @@ def test_loss_variants_match_unsw_counting_rule():
     assert set(v) == set(F.VARIANTS["loss"])
 
 
+def test_proto_names_follow_argus():
+    from src.ingest.other import proto_name
+    names = {n: proto_name(n) for n in (1, 4, 33, 47, 53, 55, 77, 89, 103, 132, 200, 256)}
+    assert names == {1: "icmp", 4: "ipnip", 33: "sep", 47: "gre", 53: "swipe", 55: "mobile",
+                     77: "sun-nd", 89: "ospf", 103: "pim", 132: "sctp", 200: "unas", 256: "arp"}
+
+
+def test_grouping_rules_split_flows():
+    from src.ingest.other import group_packets
+    pk = pd.DataFrame({"ts": np.arange(0.0, 80.0, 10.0), "src": "1.1.1.1", "dst": "2.2.2.2",
+                       "proto": 89, "len": 64, "ttl": 1})
+    counts = {r: group_packets(pk, r)["spkts"].tolist()
+              for r in ("idle60_max60", "idle60", "idle30_max30")}
+    assert counts == {"idle60_max60": [6, 2], "idle60": [8], "idle30_max30": [3, 3, 2]}
+    gap = pd.concat([pk.head(2), pk.head(1).assign(ts=200.0)])
+    assert group_packets(gap, "idle60")["spkts"].tolist() == [2, 1]
+    # a reply makes it CON, and the first sender is the source
+    two = pd.DataFrame({"ts": [0.0, 0.1], "src": ["2.2.2.2", "1.1.1.1"], "dst": ["1.1.1.1", "2.2.2.2"],
+                        "proto": 132, "len": [76, 80], "ttl": [254, 60]})
+    f = group_packets(two).iloc[0]
+    assert (f["srcip"], f["state"], f["sbytes@ip"], f["dbytes@ip"]) == ("2.2.2.2", "CON", 76, 80)
+
+
+def test_duplicate_unsw_rows_share_one_zeek_flow():
+    u = _unsw_rows().iloc[[0, 0, 2]].reset_index(drop=True)
+    u["ltime"] = u["stime"]
+    for c in ("dbytes", "spkts", "dpkts"):
+        u[c] = 1
+    u.loc[1, "attack_cat"] = "dos"                 # same flow, second label
+    z = _zeek_rows()
+    span = P._in_span(z, u)
+    assert P.covered_rows(z, span).tolist() == [True, True, True]
+    d = P.duplicates(span)
+    assert (d["rows"], d["distinct_flows"], d["flows_with_conflicting_labels"]) == (3, 2, 1)
+    assert len(P.join(z, u)) == 2                  # feature comparison stays one-to-one
+
+
 def _ct_frame():
     # four connections, one of them ends late
     return pd.DataFrame({
@@ -198,7 +235,8 @@ def zeek_features(tmp_path_factory):
     from tests.pcap_fixtures import write_fixture
     d = tmp_path_factory.mktemp("ingest")
     pcap = write_fixture(d / "fixture.pcap")
-    base, feats = F.features_from_pcap(pcap, d / "zeek")
+    base, feats, packets = F.features_from_pcap(pcap, d / "zeek")
+    base.attrs["packets"] = packets
     return d, base, feats
 
 
@@ -209,9 +247,9 @@ def _row(feats, dport, l4="tcp"):
 
 
 @needs_zeek
-def test_zeek_sees_all_five_connections(zeek_features):
+def test_zeek_sees_every_flow(zeek_features):
     _, _, feats = zeek_features
-    assert len(feats) == 5
+    assert feats["l4"].value_counts().to_dict() == {"tcp": 4, "other": 3, "udp": 1}
     assert list(feats.columns) == F.META + F.UNSW_FEATURES
 
 
@@ -287,6 +325,28 @@ def test_zeek_loss_candidates(zeek_features):
 
 
 @needs_zeek
+def test_other_protocol_flows(zeek_features):
+    from tests.pcap_fixtures import GARP, OSPF, SCTP
+    _, _, feats = zeek_features
+    o = feats[feats["l4"] == "other"].set_index("proto")
+    ospf = o.loc["ospf"]
+    assert (ospf["srcip"], ospf["dstip"], ospf["sport"], ospf["dsport"]) == (OSPF["src"], OSPF["dst"], 0, 0)
+    assert (ospf["state"], ospf["spkts"], ospf["dpkts"]) == ("INT", 3, 0)
+    assert ospf["sbytes"] == 3 * OSPF["len"] and ospf["sttl"] == 1
+    assert ospf["dur"] == pytest.approx(20.0, abs=1e-3)
+    assert ospf["sinpkt"] == pytest.approx(10000.0, abs=1e-2)
+    sctp = o.loc["sctp"]
+    assert (sctp["srcip"], sctp["state"], sctp["spkts"], sctp["dpkts"]) == (SCTP["a"], "CON", 2, 2)
+    assert (sctp["sbytes"], sctp["dbytes"], sctp["sttl"], sctp["dttl"]) == (152, 152, 254, 60)
+    arp = o.loc["arp"]
+    assert (arp["srcip"], arp["dstip"]) == (GARP["ip"], GARP["ip"])
+    assert (arp["sbytes"], arp["spkts"], arp["sttl"], arp["is_sm_ips_ports"]) == (46, 1, 0, 1)
+    # nothing TCP- or HTTP-specific leaks into these rows
+    assert (o[["swin", "stcpb", "synack", "trans_depth", "sloss"]] == 0).all().all()
+    assert set(o["service"]) == {"-"}
+
+
+@needs_zeek
 def test_zeek_window_counts_over_capture(zeek_features):
     _, _, feats = zeek_features
     # default variant: ordered by end time, self included
@@ -310,6 +370,7 @@ def test_parity_end_to_end_on_fixture(zeek_features, tmp_path):
     feats_dir = tmp_path / "cap"
     feats_dir.mkdir()
     base.to_csv(feats_dir / "base.csv.gz", index=False)
+    base.attrs["packets"].to_csv(feats_dir / "other_packets.csv.gz", index=False)
 
     X = sel[F.UNSW_FEATURES]
     model = _toy_model(X, rows["label"].to_numpy())
@@ -319,6 +380,9 @@ def test_parity_end_to_end_on_fixture(zeek_features, tmp_path):
     res = P.run(feats_dir, feats_dir, [str(tmp_path / "UNSW-NB15_x.csv")], tmp_path / "out",
                 None, tmp_path / "s1.joblib", None)
     assert res["coverage"]["share"] == 1.0
+    assert res["calibration"]["choice"]["other"] == "idle60_max60"
+    assert res["calibration"]["scores"]["other"]["idle60_max60"] == 1.0
+    assert {r["unsw"] for r in res["other_proto_confusion"]} == {"ospf", "sctp", "arp"}
     assert all(a["match"] == 1.0 for a in res["features"].values()), res["features"]
     assert res["detector"]["decision_agreement"] == 1.0
     assert (tmp_path / "out" / "parity_report.md").exists()

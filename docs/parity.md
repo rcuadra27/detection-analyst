@@ -192,3 +192,34 @@ move: 0.0148, and the `sloss` swap-one FPR stayed at exactly 0.0099.
 Added `plus1_any`: data resends, plus one if anything was resent. Derived on
 the dev capture; still chosen by calibration on capture 1 and validated on an
 unused capture.
+
+### Coverage: duplicates and the other-protocol path
+
+Looking at UNSW's records for non-TCP/UDP/ICMP traffic turned up two things.
+
+**UNSW writes some flows more than once, with different labels.** One `unas`
+flow appears as four identical records (same features, same time) labelled
+analysis, backdoor, exploits and dos. The run 1 join was one-to-one, so a single
+Zeek flow covered one of the four and the other three counted as missed. That
+undercounts coverage wherever UNSW duplicated, TCP and UDP included. Coverage
+now counts a UNSW record as covered when any Zeek flow matches it, and the
+report says how many records are duplicates and how many carry conflicting
+labels. Feature comparison stays one-to-one.
+
+**What those records look like.** Ports are always 0, so Argus keyed them by
+(source, destination, protocol): CON when packets went both ways, INT when not.
+ARP records carry the IPs from the ARP message, TTL 0 and 46 bytes (Ethernet
+payload after padding). Packets are grouped over time: an OSPF record holds 6
+hellos sent 10 s apart over 50 s.
+
+**The path.** The Zeek script logs every non-TCP/UDP/ICMP packet and every ARP
+message as one line (`other.log`). `src/ingest/other.py` groups them into
+flows. The grouping rule is not documented, so four candidates (idle timeout
+and maximum flow length of 60/60, 60/none, 30/30, 120/120 s) are scored on the
+calibration capture by how many UNSW flows they reproduce with the right packet
+count. Protocol names follow the IANA keywords Argus used, with unassigned
+numbers as `unas`; the report prints UNSW's name next to this pipeline's, so
+naming differences show up rather than hiding as missed flows.
+
+Zeek 8 also writes these protocols to `conn.log` as `unknown_transport`; those
+rows are dropped so nothing is counted twice.

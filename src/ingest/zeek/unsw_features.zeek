@@ -21,7 +21,25 @@
 module UNSWFeatures;
 
 export {
-	redef enum Log::ID += { LOG };
+	redef enum Log::ID += { LOG, OTHER_LOG };
+
+	## One line per packet that Zeek does not turn into a connection: IPv4
+	## protocols other than TCP, UDP and ICMP, and ARP. These are few (UNSW
+	## median: 2 packets per flow), so the Python side groups them into flows
+	## and can try different grouping rules without re-running Zeek.
+	type OtherPkt: record {
+		ts:    time  &log;
+		src:   addr  &log;
+		dst:   addr  &log;
+		## IP protocol number; ARP is logged as 256 (not an IP protocol).
+		proto: count &log;
+		## IP total length; for ARP, the Ethernet payload length (with padding).
+		len:   count &log;
+		## IP TTL; 0 for ARP.
+		ttl:   count &log;
+	};
+
+	const ARP_PROTO = 256;
 
 	type Info: record {
 		ts:                time   &log;
@@ -116,6 +134,44 @@ const TH_ACK = 16;
 event zeek_init()
 	{
 	Log::create_stream(UNSWFeatures::LOG, [$columns=Info, $path="unsw"]);
+	Log::create_stream(UNSWFeatures::OTHER_LOG, [$columns=OtherPkt, $path="other"]);
+	}
+
+event raw_packet(p: raw_pkt_hdr)
+	{
+	if ( p?$ip )
+		{
+		local pr = p$ip$p;
+		if ( pr == 1 || pr == 6 || pr == 17 )
+			return;
+		Log::write(UNSWFeatures::OTHER_LOG,
+		           OtherPkt($ts=network_time(), $src=p$ip$src, $dst=p$ip$dst,
+		                    $proto=pr, $len=p$ip$len, $ttl=p$ip$ttl));
+		return;
+		}
+	}
+
+function log_arp(spa: addr, tpa: addr)
+	{
+	# The ARP events carry no length; the frame being processed does.
+	# Ethernet payload = wire length minus the 14-byte Ethernet header.
+	local pkt = get_current_packet();
+	local plen = pkt$len >= 14 ? pkt$len - 14 : 0;
+	Log::write(UNSWFeatures::OTHER_LOG,
+	           OtherPkt($ts=network_time(), $src=spa, $dst=tpa,
+	                    $proto=ARP_PROTO, $len=plen, $ttl=0));
+	}
+
+event arp_request(mac_src: string, mac_dst: string, SPA: addr, SHA: string,
+                  TPA: addr, THA: string)
+	{
+	log_arp(SPA, TPA);
+	}
+
+event arp_reply(mac_src: string, mac_dst: string, SPA: addr, SHA: string,
+                TPA: addr, THA: string)
+	{
+	log_arp(SPA, TPA);
 	}
 
 function get_state(c: connection): ConnState

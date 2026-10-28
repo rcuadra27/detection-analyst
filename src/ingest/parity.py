@@ -124,6 +124,23 @@ def check_rate_formula(train_csv: str | Path) -> dict:
 
 # ---------------------------------------------------------------- join
 
+CONN_PROTOS = ("tcp", "udp", "icmp")
+_KEY = ["srcip", "sport", "dstip", "dsport", "_fam"]
+# Two UNSW rows with all of these equal are the same flow written twice.
+DUP_COLS = ["srcip", "sport", "dstip", "dsport", "proto", "stime", "ltime",
+            "sbytes", "dbytes", "spkts", "dpkts"]
+
+
+def _family(s: pd.Series) -> pd.Series:
+    """tcp/udp/icmp stay as they are; every other protocol (and ARP) is 'other'.
+
+    Flows on the other-protocol path are matched by addresses and time, and the
+    protocol name is compared as a feature, so a naming difference shows up in
+    the report instead of as a missing flow."""
+    s = s.astype(str)
+    return s.where(s.isin(CONN_PROTOS), "other")
+
+
 def join(zeek: pd.DataFrame, unsw: pd.DataFrame,
          tol: float = JOIN_TOLERANCE_S) -> pd.DataFrame:
     """Match Zeek connections to UNSW records: same 5-tuple, nearest start time.
@@ -133,23 +150,60 @@ def join(zeek: pd.DataFrame, unsw: pd.DataFrame,
     """
     z = zeek.copy()
     z["_zi"] = np.arange(len(z))
+    z["_fam"] = _family(z["l4"])
     u = unsw.add_prefix("u_")
     u["_ui"] = np.arange(len(u))
-    m = z.merge(u, left_on=["srcip", "sport", "dstip", "dsport", "l4"],
-                right_on=["u_srcip", "u_sport", "u_dstip", "u_dsport", "u_proto"])
+    u["u__fam"] = _family(u["u_proto"])
+    m = z.merge(u, left_on=_KEY, right_on=[f"u_{k}" for k in _KEY])
     m["_dt"] = (m["ts"] - m["u_stime"]).abs()
     m = m[m["_dt"] <= tol].sort_values("_dt", kind="stable")
     m = m.drop_duplicates("_zi").drop_duplicates("_ui")
     return m.sort_values("_zi").reset_index(drop=True)
 
 
+def _in_span(zeek: pd.DataFrame, unsw: pd.DataFrame) -> pd.DataFrame:
+    lo, hi = zeek["ts"].min() - JOIN_TOLERANCE_S, zeek["end_ts"].max() + JOIN_TOLERANCE_S
+    return unsw[(unsw["stime"] >= lo) & (unsw["stime"] <= hi)].copy()
+
+
+def covered_rows(zeek: pd.DataFrame, span: pd.DataFrame,
+                 tol: float = JOIN_TOLERANCE_S) -> pd.Series:
+    """True for each UNSW row that some Zeek flow matches (same key, start time
+    within tolerance). Unlike `join`, several UNSW rows may share one Zeek flow:
+    UNSW writes some flows several times, once per attack label."""
+    z = zeek[["srcip", "sport", "dstip", "dsport", "l4", "ts"]].copy()
+    z["_fam"] = _family(z["l4"])
+    s = span[["srcip", "sport", "dstip", "dsport", "proto", "stime"]].copy()
+    s["_fam"] = _family(s["proto"])
+    s["_row"] = span.index
+    mm = s.merge(z[_KEY + ["ts"]], on=_KEY)
+    hit = set(mm.loc[(mm["ts"] - mm["stime"]).abs() <= tol, "_row"])
+    return pd.Series(span.index.isin(list(hit)), index=span.index)
+
+
+def _dup_cols(df: pd.DataFrame) -> list[str]:
+    return [c for c in DUP_COLS if c in df.columns]
+
+
+def duplicates(span: pd.DataFrame) -> dict:
+    """How often UNSW writes the same flow more than once, and with which labels."""
+    g = span.groupby(_dup_cols(span), dropna=False)
+    size = g.size()
+    labels = g["attack_cat"].nunique()
+    return {"rows": int(len(span)), "distinct_flows": int(len(size)),
+            "rows_in_duplicated_flows": int(size[size > 1].sum()),
+            "duplicated_flows": int((size > 1).sum()),
+            "flows_with_conflicting_labels": int((labels > 1).sum()),
+            "rows_in_conflicting_flows": int(size[labels > 1].sum())}
+
+
 def coverage(zeek: pd.DataFrame, unsw: pd.DataFrame, matched: pd.DataFrame) -> dict:
     """Share of UNSW records inside the capture's time span that Zeek produced."""
-    lo, hi = zeek["ts"].min() - JOIN_TOLERANCE_S, zeek["end_ts"].max() + JOIN_TOLERANCE_S
-    span = unsw[(unsw["stime"] >= lo) & (unsw["stime"] <= hi)].copy()
-    span["_ui"] = span.index
-    hit = set(matched["_ui"]) if len(matched) else set()
-    span["matched"] = span["_ui"].map(lambda i: i in hit)
+    span = _in_span(zeek, unsw)
+    span["matched"] = covered_rows(zeek, span)
+    dup = duplicates(span)
+    flows = span.groupby(_dup_cols(span), dropna=False)["matched"].any()
+    dup["distinct_flows_covered"] = round(float(flows.mean()) if len(flows) else 0.0, 4)
     def table(col):
         g = span.groupby(col)["matched"].agg(["sum", "count"])
         g["share"] = g["sum"] / g["count"]
@@ -158,6 +212,7 @@ def coverage(zeek: pd.DataFrame, unsw: pd.DataFrame, matched: pd.DataFrame) -> d
                 for k, r in g.sort_values("count", ascending=False).iterrows()}
     return {"unsw_in_span": int(len(span)), "matched": int(span["matched"].sum()),
             "share": round(float(span["matched"].mean()) if len(span) else 0.0, 4),
+            "duplicates": dup,
             "by_class": table("attack_cat"), "by_proto": table("proto"),
             "zeek_connections": int(len(zeek)),
             "zeek_unmatched": int(len(zeek) - len(matched))}
@@ -186,16 +241,38 @@ def feature_agreement(m: pd.DataFrame) -> dict:
             if f != "rate" and f"u_{f}" in m.columns}
 
 
+def _other_rule_score(base: pd.DataFrame, unsw: pd.DataFrame, choice: dict,
+                      ct_lookup: dict | None) -> float:
+    """Share of UNSW's other-protocol flows (distinct, in span) that a Zeek-side
+    flow matches with the same packet count. Rewards getting both the flow
+    boundaries and the start times right."""
+    sel = select(base, choice, ct_lookup)
+    span = _in_span(sel, unsw)
+    span = span[_family(span["proto"]) == "other"].drop_duplicates(_dup_cols(span))
+    if not len(span):
+        return 0.0
+    m = join(sel[sel["l4"] == "other"], span)
+    return round(float((m["spkts"] == m["u_spkts"]).sum() / len(span)), 4)
+
+
 def calibrate(base: pd.DataFrame, unsw: pd.DataFrame, ct_lookup: dict | None,
-              rate_variant: str) -> dict:
+              rate_variant: str, packets: pd.DataFrame | None = None) -> dict:
     """Choose each variant group's definition by agreement on this capture.
 
     Groups are chosen one at a time with the others held at their defaults;
     they touch disjoint features (window counts depend on `service`, so the
-    service group is settled first).
+    service group is settled first). The other-protocol grouping rule changes
+    which rows exist, so it is settled before everything else.
     """
+    from src.ingest.other import combine
     choice = {**DEFAULT_CHOICE, "rate": rate_variant}
     scores: dict[str, dict] = {}
+    if packets is not None and len(packets):
+        scores["other"] = {v: _other_rule_score(combine(base, packets, v), unsw,
+                                                {**choice, "other": v}, ct_lookup)
+                           for v in VARIANTS["other"]}
+        choice["other"] = max(scores["other"], key=scores["other"].get)
+        base = combine(base, packets, choice["other"])
     order = ["service"] + [g for g in GROUP_FEATURES if g != "service"]
     for group in order:
         scores[group] = {}
@@ -277,12 +354,25 @@ def write_report(res: dict, out: Path) -> None:
               "## Coverage", "",
               f"UNSW records in the capture's time span: {cov['unsw_in_span']}. "
               f"Matched to a Zeek connection: {cov['matched']} ({cov['share']:.1%}).", "",
-              "| class | matched | total | share |", "|---|---|---|---|"]
+              ]
+    dup = cov.get("duplicates")
+    if dup:
+        lines += [f"UNSW writes some flows more than once: {dup['rows']} records are "
+                  f"{dup['distinct_flows']} distinct flows. {dup['rows_in_duplicated_flows']} "
+                  f"records belong to duplicated flows; {dup['flows_with_conflicting_labels']} "
+                  f"flows ({dup['rows_in_conflicting_flows']} records) carry conflicting attack "
+                  f"labels. Distinct flows covered: {dup['distinct_flows_covered']:.1%}.", ""]
+    lines += ["| class | matched | total | share |", "|---|---|---|---|"]
     for k, r in cov["by_class"].items():
         lines.append(f"| {k} | {r['matched']} | {r['total']} | {r['share']:.1%} |")
     lines += ["", "| proto (top 10) | matched | total | share |", "|---|---|---|---|"]
     for k, r in list(cov["by_proto"].items())[:10]:
         lines.append(f"| {k} | {r['matched']} | {r['total']} | {r['share']:.1%} |")
+    if res.get("other_proto_confusion"):
+        lines += ["", "Protocol names on the other-protocol path (top 15):", "",
+                  "| UNSW | this pipeline | flows |", "|---|---|---|"]
+        for r in res["other_proto_confusion"]:
+            lines.append(f"| {r['unsw']} | {r['zeek']} | {r['n']} |")
     lines += ["", "## Per-feature agreement (matched flows)", "",
               "| feature | source | match | median rel err | spearman |", "|---|---|---|---|---|"]
     for f, a in sorted(res["features"].items(), key=lambda kv: kv[1]["match"]):
@@ -307,6 +397,18 @@ def write_report(res: dict, out: Path) -> None:
     (out / "parity_report.md").write_text("\n".join(lines) + "\n")
 
 
+def _packets(d: Path) -> pd.DataFrame | None:
+    p = d / "other_packets.csv.gz"
+    return pd.read_csv(p) if p.exists() else None
+
+
+def other_proto_confusion(m: pd.DataFrame, top: int = 15) -> list[dict]:
+    """Protocol names on the other-protocol path: UNSW's vs this pipeline's."""
+    o = m[m["l4"] == "other"]
+    c = o.groupby(["u_proto", "proto"]).size().sort_values(ascending=False).head(top)
+    return [{"unsw": a, "zeek": b, "n": int(n)} for (a, b), n in c.items()]
+
+
 def run(calib_dir: Path, valid_dir: Path, unsw_csvs: list[str], out: Path,
         train_csv: str | None, stage1_path: Path | None, stage2_path: Path | None) -> dict:
     from src.ingest.features import PROVENANCE
@@ -320,11 +422,15 @@ def run(calib_dir: Path, valid_dir: Path, unsw_csvs: list[str], out: Path,
         rate_check = check_rate_formula(train_csv)
         rate_variant = rate_check["best"]
 
+    from src.ingest.other import combine
     calib_base = pd.read_csv(calib_dir / "base.csv.gz", low_memory=False)
-    cal = calibrate(calib_base, unsw, ct_lookup, rate_variant)
+    cal = calibrate(calib_base, unsw, ct_lookup, rate_variant, _packets(calib_dir))
     (out / "choice.json").write_text(json.dumps(cal, indent=2))
 
     valid_base = pd.read_csv(valid_dir / "base.csv.gz", low_memory=False)
+    vp = _packets(valid_dir)
+    if vp is not None:
+        valid_base = combine(valid_base, vp, cal["choice"]["other"])
     vz = select(valid_base, cal["choice"], ct_lookup)
     m = join(vz, unsw)
     res = {"calib": str(calib_dir), "valid": str(valid_dir),
@@ -332,7 +438,8 @@ def run(calib_dir: Path, valid_dir: Path, unsw_csvs: list[str], out: Path,
            "ct_state_ttl_purity": ct_lookup["purity"] if ct_lookup else None,
            "coverage": coverage(vz, unsw, m),
            "features": feature_agreement(m) if len(m) else {},
-           "state_confusion": state_confusion(m) if len(m) else []}
+           "state_confusion": state_confusion(m) if len(m) else [],
+           "other_proto_confusion": other_proto_confusion(m) if len(m) else []}
     if ct_lookup and len(m):
         # Isolate the lookup from TTL/state errors: apply it to UNSW's own inputs.
         own = apply_ct_state_ttl(m["u_state"], m["u_sttl"], m["u_dttl"], ct_lookup)

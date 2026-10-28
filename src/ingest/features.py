@@ -89,6 +89,8 @@ VARIANTS = {
     # one if anything at all was resent, data or SYN/FIN.
     "loss":   ["retrans", "retrans_gaps", "retrans_zero", "all", "retrans_plus1",
                "plus1_any"],
+    # Grouping rule for non-TCP/UDP/ICMP packets into flows (other.py).
+    "other":  ["idle60_max60", "idle60", "idle30_max30", "idle120_max120"],
 }
 DEFAULT_CHOICE = {k: v[0] for k, v in VARIANTS.items()}
 
@@ -391,12 +393,31 @@ def select(base: pd.DataFrame, choice: dict | None = None,
     return f[META + UNSW_FEATURES]
 
 
+def other_packets(logs: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """other.log as a typed frame (empty when the capture had none)."""
+    pk = logs.get("other", pd.DataFrame())
+    if pk.empty:
+        return pd.DataFrame(columns=["ts", "src", "dst", "proto", "len", "ttl"])
+    pk = pk[["ts", "src", "dst", "proto", "len", "ttl"]].copy()
+    for c in ("ts",):
+        pk[c] = pd.to_numeric(pk[c], errors="coerce")
+    for c in ("proto", "len", "ttl"):
+        pk[c] = pd.to_numeric(pk[c], errors="coerce").fillna(0).astype(int)
+    return pk
+
+
 def features_from_pcap(pcap: str | Path, workdir: str | Path, choice: dict | None = None,
-                       ct_lookup: dict | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """pcap -> (base candidates, selected 42-feature frame)."""
+                       ct_lookup: dict | None = None
+                       ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """pcap -> (base candidates incl. other-protocol flows, selected 42-feature
+    frame, other-protocol packets)."""
+    from src.ingest.other import combine
     run_zeek(pcap, workdir)
-    base = build_base(read_logs(workdir))
-    return base, select(base, choice, ct_lookup)
+    logs = read_logs(workdir)
+    packets = other_packets(logs)
+    c = {**DEFAULT_CHOICE, **(choice or {})}
+    base = combine(build_base(logs), packets, c["other"])
+    return base, select(base, choice, ct_lookup), packets
 
 
 def main() -> None:
@@ -409,10 +430,12 @@ def main() -> None:
     choice = json.loads(Path(args.choice).read_text())["choice"] if args.choice else None
     lookup = json.loads(Path(args.ct_lookup).read_text()) if args.ct_lookup else None
     out = Path(args.out)
-    base, feats = features_from_pcap(args.pcap, out / "zeek", choice, lookup)
+    base, feats, packets = features_from_pcap(args.pcap, out / "zeek", choice, lookup)
     base.to_csv(out / "base.csv.gz", index=False)
     feats.to_csv(out / "features.csv.gz", index=False)
-    print(f"[ingest] {len(feats)} connections -> {out / 'features.csv.gz'}")
+    packets.to_csv(out / "other_packets.csv.gz", index=False)
+    n_other = int((feats["l4"] == "other").sum())
+    print(f"[ingest] {len(feats)} flows ({n_other} non-TCP/UDP/ICMP) -> {out / 'features.csv.gz'}")
 
 
 if __name__ == "__main__":
