@@ -379,3 +379,41 @@ Criterion 5 is where the orientation gap will show.
 The next validation capture is chosen by the existing selection rule (>= 500
 attack records in its span, checked from the UNSW CSV before the pipeline) and
 must not be capture 1, 10 or 20 of the 17-2-2015 folder.
+
+## Validation run 3 (calibrate on capture 1, validate on 17-2-2015 capture 15): Pass under rule v2
+
+4,277 attack records in the capture's span (selection rule: >= 500).
+
+| # | criterion | threshold | result | |
+|---|---|---|---|---|
+| 1 | decision agreement | >= 95% | 99.6% (36,623 flows, 1,968 attacks) | pass |
+| 2 | recall change | within 3 points | 0.864 -> 0.852 | pass |
+| 3 | FPR change | within 2 points | 0.0019 -> 0.0014 | pass |
+| 4 | traffic coverage | >= 95%, >= 90% per major class | 99.6%; lowest major class analysis 97.0% | pass |
+| 5 | detected attack coverage | within 3 points, 10 per major class | 93.4% -> 91.0%; largest class gap fuzzers 44.3% -> 36.1% | pass |
+
+Per major class, detected with UNSW's features -> with Zeek's: exploits
+99.7 -> 98.2, dos 99.9 -> 97.5, reconnaissance 99.5 -> 98.1, fuzzers
+44.3 -> 36.1, generic 99.6 -> 97.8, backdoor 100 -> 97.3, analysis 100 -> 97.0.
+
+**Conclusion of Phase A's first question.** On a capture that shaped no fix,
+the detector scores Zeek-built features with the same decisions on 99.6% of
+flows, recall within 1.3 points, lower FPR, and detected attack coverage within
+2.4 points of its performance on UNSW's own features. Uploaded pcaps can be
+scored with the current model; retraining is not needed for that.
+
+What the pass does not cover:
+
+- Fuzzers came within 1.8 points of the per-class limit, and the detector
+  catches only 44% of fuzzers on UNSW's own features: a model weakness, which
+  the Zeek path makes slightly worse.
+- Only 34 records were covered only in the reverse direction on this capture,
+  so orientation sensitivity was barely exercised. The flip test (score each
+  flow as oriented and reversed) has not been run.
+- `pim` and `rvd` sweeps matched 0 of 22 each: Argus numbers some protocols
+  differently from the IANA list used here. In backdoor and analysis every
+  covered record was detected, so their gaps are coverage gaps.
+- Calibration and validation captures are from the same day. The 22-1-2015
+  traffic (attacks in its first two hours only) is untested.
+- Benign traffic on 22-1-2015 capture 20 (run 1): FPR 0.0 with both feature
+  sets on 20,540 flows.
