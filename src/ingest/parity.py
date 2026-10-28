@@ -195,6 +195,82 @@ def covered_rows(zeek: pd.DataFrame, span: pd.DataFrame, tol: float = JOIN_TOLER
     return pd.Series(span.index.isin(list(hit)), index=span.index)
 
 
+def overlap_cover(zeek: pd.DataFrame, span: pd.DataFrame, alerts: np.ndarray | None = None,
+                  tol: float = JOIN_TOLERANCE_S) -> pd.DataFrame:
+    """Traffic coverage by time overlap (the metric fixed after validation run 2).
+
+    A UNSW record is covered when a Zeek flow on the same endpoints, in either
+    direction, overlaps the record's time range. This does not require Zeek to
+    cut flows where Argus did: run 2 showed Zeek carrying the same packets in
+    one long UDP flow where Argus wrote dozens of short records, and orienting a
+    flow by its first packet where UNSW had the other side as source.
+
+    With `alerts` (detector decisions per Zeek row), `detected` says whether
+    any overlapping Zeek flow was flagged. Returns covered, reversed_only and
+    detected per UNSW row, indexed like `span`.
+    """
+    cols = ["srcip", "sport", "dstip", "dsport", "l4", "ts", "end_ts"]
+    z = zeek[cols].copy()
+    z["proto_z"] = zeek["proto"] if "proto" in zeek.columns else zeek["l4"]
+    z["alert"] = alerts if alerts is not None else False
+    z["_fam"] = _family(z["l4"])
+    fwd = z.assign(_rev=0)
+    rev = z.rename(columns={"srcip": "dstip", "dstip": "srcip",
+                            "sport": "dsport", "dsport": "sport"}).assign(_rev=1)
+    zz = pd.concat([fwd, rev], ignore_index=True)
+    s = span[["srcip", "sport", "dstip", "dsport", "proto", "stime", "ltime"]].copy()
+    s["_fam"] = _family(s["proto"])
+    s["_row"] = span.index
+    mm = s.merge(zz[_KEY + ["ts", "end_ts", "proto_z", "alert", "_rev"]], on=_KEY)
+    # UNSW times are whole seconds: the record runs somewhere in [stime, ltime + 1)
+    ok = (mm["ts"] <= mm["ltime"] + 1 + tol) & (mm["end_ts"] >= mm["stime"] - tol)
+    ok &= (mm["_fam"] != "other") | (mm["proto_z"].astype(str) == mm["proto"].astype(str))
+    mm = mm[ok]
+    g = mm.groupby("_row")
+    out = pd.DataFrame(index=span.index)
+    out["covered"] = out.index.isin(g.size().index)
+    fwd_hit = mm[mm["_rev"] == 0].groupby("_row").size()
+    out["reversed_only"] = out["covered"] & ~out.index.isin(fwd_hit.index)
+    out["detected"] = out.index.isin(mm[mm["alert"]].groupby("_row").size().index)
+    return out
+
+
+def major_classes(span: pd.DataFrame, min_records: int = 100) -> list[str]:
+    """Attack classes with at least `min_records` records in the capture."""
+    vc = span.loc[span["label"] == 1, "attack_cat"].value_counts()
+    return [c for c, n in vc.items() if n >= min_records]
+
+
+def overlap_report(zeek: pd.DataFrame, unsw: pd.DataFrame, s1=None, rate_variant: str =
+                   "pkts_minus1", threshold: float = THRESHOLD) -> dict:
+    """Traffic coverage and detected attack coverage, overall and per class."""
+    span = _in_span(zeek, unsw)
+    alerts = None
+    if s1 is not None and len(zeek):
+        alerts = s1.predict_proba(zeek[UNSW_FEATURES])[:, 1] >= threshold
+    ov = overlap_cover(zeek, span, alerts)
+    span = span.join(ov)
+    att = span[span["label"] == 1]
+    res = {"records": int(len(span)), "attack_records": int(len(att)),
+           "traffic_coverage": round(float(span["covered"].mean()), 4) if len(span) else None,
+           "reversed_only": int(span["reversed_only"].sum()),
+           "major_classes": major_classes(span), "by_class": {}}
+    if s1 is not None and len(att):
+        att = att.copy()
+        Xu = unsw_feature_frame(att, rate_variant, prefix="")
+        att["unsw_detected"] = s1.predict_proba(Xu)[:, 1] >= threshold
+        res["detected_zeek"] = round(float(att["detected"].mean()), 4)
+        res["detected_unsw"] = round(float(att["unsw_detected"].mean()), 4)
+    for cls, g in span.groupby("attack_cat"):
+        r = {"records": int(len(g)), "covered": round(float(g["covered"].mean()), 4)}
+        if cls != "normal" and "unsw_detected" in att.columns:
+            a = att[att["attack_cat"] == cls]
+            r["detected_zeek"] = round(float(a["detected"].mean()), 4)
+            r["detected_unsw"] = round(float(a["unsw_detected"].mean()), 4)
+        res["by_class"][cls] = r
+    return res
+
+
 def _dup_cols(df: pd.DataFrame) -> list[str]:
     return [c for c in DUP_COLS if c in df.columns]
 
@@ -306,11 +382,12 @@ def calibrate(base: pd.DataFrame, unsw: pd.DataFrame, ct_lookup: dict | None,
 
 # ---------------------------------------------------------------- detector
 
-def unsw_feature_frame(m: pd.DataFrame, rate_variant: str) -> pd.DataFrame:
-    """UNSW's own 42 features for the matched rows, in training column order."""
-    X = pd.DataFrame({f: m[f"u_{f}"] for f in UNSW_FEATURES if f != "rate"})
-    dur = m["u_dur"].to_numpy(float)
-    pk = (m["u_spkts"] + m["u_dpkts"]).to_numpy(float) - (1 if rate_variant == "pkts_minus1" else 0)
+def unsw_feature_frame(m: pd.DataFrame, rate_variant: str, prefix: str = "u_") -> pd.DataFrame:
+    """UNSW's own 42 features, in training column order. `prefix` is 'u_' for
+    joined rows and '' for raw UNSW rows."""
+    X = pd.DataFrame({f: m[f"{prefix}{f}"] for f in UNSW_FEATURES if f != "rate"})
+    dur = m[f"{prefix}dur"].to_numpy(float)
+    pk = (m[f"{prefix}spkts"] + m[f"{prefix}dpkts"]).to_numpy(float) - (1 if rate_variant == "pkts_minus1" else 0)
     X["rate"] = np.where(dur > 0, pk / np.where(dur > 0, dur, 1), 0.0)
     return X[UNSW_FEATURES]
 
@@ -397,6 +474,24 @@ def write_report(res: dict, out: Path) -> None:
     for f, a in sorted(res["features"].items(), key=lambda kv: kv[1]["match"]):
         lines.append(f"| {f} | {res['provenance'].get(f, '')} | {a['match']:.1%} | "
                      f"{a.get('median_rel_err', '')} | {a.get('spearman', '')} |")
+    o = res.get("overlap")
+    if o:
+        lines += ["", "## Traffic and detection coverage (time overlap)", "",
+                  f"A UNSW record is covered when a Zeek flow on the same endpoints, either "
+                  f"direction, overlaps its time range. Traffic coverage: "
+                  f"{o['traffic_coverage']:.1%} of {o['records']} records "
+                  f"({o['reversed_only']} covered only in the reverse direction).", ""]
+        if "detected_zeek" in o:
+            lines += [f"Detected attack coverage: {o['detected_zeek']:.1%} with Zeek flows vs "
+                      f"{o['detected_unsw']:.1%} with UNSW's own features "
+                      f"({o['attack_records']} attack records).", ""]
+        lines += [f"Major classes (>= 100 attack records): {', '.join(o['major_classes']) or 'none'}.", "",
+                  "| class | records | covered | detected (Zeek) | detected (UNSW) |",
+                  "|---|---|---|---|---|"]
+        for k, r in sorted(o["by_class"].items(), key=lambda kv: -kv[1]["records"]):
+            dz = f"{r['detected_zeek']:.1%}" if "detected_zeek" in r else ""
+            du = f"{r['detected_unsw']:.1%}" if "detected_unsw" in r else ""
+            lines.append(f"| {k} | {r['records']} | {r['covered']:.1%} | {dz} | {du} |")
     d = res.get("detector")
     if d:
         lines += ["", "## Detector at the operating point", "",
@@ -471,6 +566,9 @@ def run(calib_dir: Path, valid_dir: Path, unsw_csvs: list[str], out: Path,
         Xu = unsw_feature_frame(m, rate_variant)
         Xz = m[UNSW_FEATURES].copy()
         res["detector"] = detector_parity(Xu, Xz, m["u_label"].to_numpy(), s1, s2)
+        res["overlap"] = overlap_report(vz, unsw, s1, rate_variant)
+    elif len(vz):
+        res["overlap"] = overlap_report(vz, unsw, None, rate_variant)
 
     (out / "parity.json").write_text(json.dumps(res, indent=2, default=str))
     write_report(res, out)
@@ -491,6 +589,12 @@ def main() -> None:
     res = run(a.calib, a.valid, a.unsw_csv, a.out, train, a.stage1, a.stage2)
     cov = res["coverage"]
     print(f"[parity] coverage {cov['matched']}/{cov['unsw_in_span']} ({cov['share']:.1%})")
+    o = res.get("overlap")
+    if o:
+        msg = f"[parity] traffic coverage (overlap) {o['traffic_coverage']:.1%}"
+        if "detected_zeek" in o:
+            msg += f"; detected attacks {o['detected_unsw']:.1%} (UNSW) -> {o['detected_zeek']:.1%} (Zeek)"
+        print(msg)
     if "detector" in res:
         d = res["detector"]
         print(f"[parity] decision agreement {d['decision_agreement']:.1%}; "

@@ -109,6 +109,48 @@ def test_other_protocol_coverage_requires_the_name():
     assert m["u_proto"].tolist() == ["pim"]               # same-name match preferred
 
 
+def test_overlap_cover_handles_merged_and_reversed_flows():
+    # Run 2's pattern: one long Zeek UDP flow A:1043 -> V:53 where UNSW wrote
+    # many short records, and a Zeek flow A:53 -> V:1043 that carries the
+    # traffic UNSW recorded as V:1043 -> A:53 (Zeek oriented it the other way).
+    z = pd.DataFrame({
+        "srcip": ["A", "A"], "sport": [1043, 53], "dstip": ["V", "V"], "dsport": [53, 1043],
+        "l4": ["udp", "udp"], "proto": ["udp", "udp"],
+        "ts": [100.0, 100.5], "end_ts": [530.0, 530.0]})
+    u = pd.DataFrame({
+        "srcip": ["A", "A", "V", "A"], "sport": [1043, 1043, 1043, 1043],
+        "dstip": ["V", "V", "A", "V"], "dsport": [53, 53, 53, 53],
+        "proto": ["udp"] * 4,
+        "stime": [120.0, 400.0, 300.0, 900.0], "ltime": [121.0, 401.0, 300.0, 901.0],
+        "attack_cat": ["generic"] * 4, "label": [1] * 4})
+    span = u.copy()
+    ov = P.overlap_cover(z, span, alerts=np.array([True, False]))
+    # records inside the long flow are covered even though they start later;
+    # the V:1043 -> A:53 record is carried by Zeek's A:53 -> V:1043 flow, reversed;
+    # the record after the flow ended is not covered
+    assert ov["covered"].tolist() == [True, True, True, False]
+    assert ov["reversed_only"].tolist() == [False, False, True, False]
+    # only the forward flow was flagged, so the reversed record is covered but missed
+    assert ov["detected"].tolist() == [True, True, False, False]
+    # the start-time metric misses the later records in the merged flow
+    assert P.covered_rows(z, span).tolist() == [False, False, False, False]
+
+
+def test_overlap_cover_other_protocols_need_the_name():
+    z = pd.DataFrame({"srcip": ["A"], "sport": [0], "dstip": ["V"], "dsport": [0], "l4": ["other"],
+                      "proto": ["pim"], "ts": [10.0], "end_ts": [10.0]})
+    u = pd.DataFrame({"srcip": ["A", "A"], "sport": [0, 0], "dstip": ["V", "V"], "dsport": [0, 0],
+                      "proto": ["pim", "mobile"], "stime": [10.0, 10.0], "ltime": [10.0, 10.0],
+                      "attack_cat": ["dos", "dos"], "label": [1, 1]})
+    assert P.overlap_cover(z, u)["covered"].tolist() == [True, False]
+
+
+def test_major_classes_threshold():
+    span = pd.DataFrame({"label": [1] * 150 + [1] * 50 + [0] * 500,
+                         "attack_cat": ["generic"] * 150 + ["worms"] * 50 + ["normal"] * 500})
+    assert P.major_classes(span) == ["generic"]
+
+
 def _ct_frame():
     # four connections, one of them ends late
     return pd.DataFrame({
@@ -398,5 +440,8 @@ def test_parity_end_to_end_on_fixture(zeek_features, tmp_path):
     assert {r["unsw"] for r in res["other_proto_confusion"]} == {"ospf", "sctp", "arp"}
     assert all(a["match"] == 1.0 for a in res["features"].values()), res["features"]
     assert res["detector"]["decision_agreement"] == 1.0
+    o = res["overlap"]
+    assert o["traffic_coverage"] == 1.0
+    assert o["detected_zeek"] == o["detected_unsw"]          # identical features
     assert (tmp_path / "out" / "parity_report.md").exists()
     assert json.loads((tmp_path / "out" / "choice.json").read_text())["choice"]

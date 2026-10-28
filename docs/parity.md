@@ -327,3 +327,55 @@ segmentation, not retraining.
 
 Any fix for this is built and checked on captures already used, and validated
 on a new capture chosen by the same selection rule.
+
+### Diagnosis of run 2's coverage failure
+
+Investigated on capture 20 after its result was recorded; nothing below
+changes that result.
+
+- 5,576 of the missed generic records are UDP to port 53 on four 5-tuples
+  between one attacker and one victim, recorded in both directions
+  (attacker:1043 -> victim:53 and victim:1043 -> attacker:53, likewise for
+  port 47439): 331 distinct UNSW flows on six 5-tuples.
+- **Merging.** On attacker:1043 -> victim:53 Zeek has one flow, 328 packets over
+  431 s. UNSW wrote about 55 short records on the same 5-tuple. Zeek keeps a
+  UDP flow open until it has been idle for a minute; Argus split it, by a rule
+  not evident from the records (some records start milliseconds apart, some
+  overlap).
+- **Orientation.** The victim's packets went into a Zeek flow oriented
+  attacker:53 -> victim:1043 (1 packet out, 327 back). Zeek orients by the
+  first packet it sees; UNSW had the victim as source.
+- **Orientation changes detection.** The detector flags the merged forward flow
+  (attack probability 0.961, classed fuzzers where UNSW says generic) and
+  scores the reversed one benign (0.003). Its inputs are direction-specific
+  (sbytes vs dbytes, sttl vs dttl), so a flow oriented against Argus's
+  convention looks different to it. This is a detection gap for uploads, not a
+  matching artifact. Not fixed here.
+- The other-protocol path reproduces UNSW's records to the microsecond on a
+  protocol sweep (durations 1.008568, 1.519138, 1.317599 s on both sides). One
+  record was missed on a protocol-name difference (UNSW `rvd`, paired with a
+  flow named `ah` here); unresolved.
+
+## Decision rule v2 (set after run 2, before the next validation)
+
+Start-time coverage asks whether Zeek cut flows where Argus did. Run 2 showed
+Zeek carrying the missed attack traffic in differently segmented and
+differently oriented flows. For scoring uploads, the questions are whether the
+traffic is in some Zeek flow and whether the detector flags it. So coverage is
+redefined, and detection is measured directly:
+
+| # | criterion | threshold |
+|---|---|---|
+| 1 | decision agreement (one-to-one matched flows) | >= 95% |
+| 2 | recall change, UNSW features -> Zeek features | within 3 points |
+| 3 | FPR change | within 2 points |
+| 4 | traffic coverage: a UNSW record is covered when a Zeek flow on the same endpoints, either direction, overlaps its time range (other protocols: same protocol name) | >= 95% overall, >= 90% per major class |
+| 5 | detected attack coverage: share of attack records with a flagged overlapping Zeek flow, against the detector on UNSW's own features for the same records | within 3 points overall, within 10 points per major class |
+
+A major class has at least 100 attack records in the capture. Start-time
+coverage stays in the report. Run 2's verdict under rule v1 stands as recorded.
+Criterion 5 is where the orientation gap will show.
+
+The next validation capture is chosen by the existing selection rule (>= 500
+attack records in its span, checked from the UNSW CSV before the pipeline) and
+must not be capture 1, 10 or 20 of the 17-2-2015 folder.
