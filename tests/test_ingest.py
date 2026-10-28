@@ -96,6 +96,19 @@ def test_duplicate_unsw_rows_share_one_zeek_flow():
     assert len(P.join(z, u)) == 2                  # feature comparison stays one-to-one
 
 
+def test_other_protocol_coverage_requires_the_name():
+    z = pd.DataFrame({"srcip": ["1.1.1.1"], "sport": [0], "dstip": ["2.2.2.2"], "dsport": [0],
+                      "l4": ["other"], "proto": ["pim"], "ts": [100.0], "end_ts": [100.0]})
+    u = pd.DataFrame({"srcip": ["1.1.1.1"] * 2, "sport": [0, 0], "dstip": ["2.2.2.2"] * 2,
+                      "dsport": [0, 0], "proto": ["pim", "mobile"], "stime": [100.0, 100.0],
+                      "attack_cat": ["dos", "dos"], "label": [1, 1]})
+    span = P._in_span(z, u)
+    assert P.covered_rows(z, span).tolist() == [True, False]
+    assert P.covered_rows(z, span, require_name=False).tolist() == [True, True]
+    m = P.join(z, u.iloc[::-1].reset_index(drop=True))   # mobile row first
+    assert m["u_proto"].tolist() == ["pim"]               # same-name match preferred
+
+
 def _ct_frame():
     # four connections, one of them ends late
     return pd.DataFrame({

@@ -156,7 +156,11 @@ def join(zeek: pd.DataFrame, unsw: pd.DataFrame,
     u["u__fam"] = _family(u["u_proto"])
     m = z.merge(u, left_on=_KEY, right_on=[f"u_{k}" for k in _KEY])
     m["_dt"] = (m["ts"] - m["u_stime"]).abs()
-    m = m[m["_dt"] <= tol].sort_values("_dt", kind="stable")
+    # prefer a same-name match (matters on the other-protocol path, where
+    # several protocols can share addresses and time)
+    m["_name_diff"] = (m["proto"].astype(str) != m["u_proto"].astype(str)).astype(int) \
+        if "proto" in m.columns else 0
+    m = m[m["_dt"] <= tol].sort_values(["_name_diff", "_dt"], kind="stable")
     m = m.drop_duplicates("_zi").drop_duplicates("_ui")
     return m.sort_values("_zi").reset_index(drop=True)
 
@@ -166,18 +170,28 @@ def _in_span(zeek: pd.DataFrame, unsw: pd.DataFrame) -> pd.DataFrame:
     return unsw[(unsw["stime"] >= lo) & (unsw["stime"] <= hi)].copy()
 
 
-def covered_rows(zeek: pd.DataFrame, span: pd.DataFrame,
-                 tol: float = JOIN_TOLERANCE_S) -> pd.Series:
+def covered_rows(zeek: pd.DataFrame, span: pd.DataFrame, tol: float = JOIN_TOLERANCE_S,
+                 require_name: bool = True) -> pd.Series:
     """True for each UNSW row that some Zeek flow matches (same key, start time
     within tolerance). Unlike `join`, several UNSW rows may share one Zeek flow:
-    UNSW writes some flows several times, once per attack label."""
+    UNSW writes some flows several times, once per attack label.
+
+    For other-protocol flows the protocol name must also agree. A protocol
+    sweep sends many protocols to one host in the same second, so matching on
+    addresses and time alone lets a 'pim' flow cover a 'mobile' record.
+    `require_name=False` gives the name-agnostic count for comparison."""
     z = zeek[["srcip", "sport", "dstip", "dsport", "l4", "ts"]].copy()
+    z["proto"] = zeek["proto"] if "proto" in zeek.columns else zeek["l4"]
     z["_fam"] = _family(z["l4"])
+    z = z.rename(columns={"proto": "_zproto"})
     s = span[["srcip", "sport", "dstip", "dsport", "proto", "stime"]].copy()
     s["_fam"] = _family(s["proto"])
     s["_row"] = span.index
-    mm = s.merge(z[_KEY + ["ts"]], on=_KEY)
-    hit = set(mm.loc[(mm["ts"] - mm["stime"]).abs() <= tol, "_row"])
+    mm = s.merge(z[_KEY + ["ts", "_zproto"]], on=_KEY)
+    ok = (mm["ts"] - mm["stime"]).abs() <= tol
+    if require_name:
+        ok &= (mm["_fam"] != "other") | (mm["_zproto"].astype(str) == mm["proto"].astype(str))
+    hit = set(mm.loc[ok, "_row"])
     return pd.Series(span.index.isin(list(hit)), index=span.index)
 
 
@@ -201,6 +215,7 @@ def coverage(zeek: pd.DataFrame, unsw: pd.DataFrame, matched: pd.DataFrame) -> d
     """Share of UNSW records inside the capture's time span that Zeek produced."""
     span = _in_span(zeek, unsw)
     span["matched"] = covered_rows(zeek, span)
+    any_name = covered_rows(zeek, span, require_name=False)
     dup = duplicates(span)
     flows = span.groupby(_dup_cols(span), dropna=False)["matched"].any()
     dup["distinct_flows_covered"] = round(float(flows.mean()) if len(flows) else 0.0, 4)
@@ -213,6 +228,7 @@ def coverage(zeek: pd.DataFrame, unsw: pd.DataFrame, matched: pd.DataFrame) -> d
     return {"unsw_in_span": int(len(span)), "matched": int(span["matched"].sum()),
             "share": round(float(span["matched"].mean()) if len(span) else 0.0, 4),
             "duplicates": dup,
+            "share_ignoring_protocol_name": round(float(any_name.mean()) if len(span) else 0.0, 4),
             "by_class": table("attack_cat"), "by_proto": table("proto"),
             "zeek_connections": int(len(zeek)),
             "zeek_unmatched": int(len(zeek) - len(matched))}
@@ -362,6 +378,9 @@ def write_report(res: dict, out: Path) -> None:
                   f"records belong to duplicated flows; {dup['flows_with_conflicting_labels']} "
                   f"flows ({dup['rows_in_conflicting_flows']} records) carry conflicting attack "
                   f"labels. Distinct flows covered: {dup['distinct_flows_covered']:.1%}.", ""]
+    if "share_ignoring_protocol_name" in cov:
+        lines += [f"Other-protocol flows must match on protocol name. Ignoring the name, "
+                  f"coverage would be {cov['share_ignoring_protocol_name']:.1%}.", ""]
     lines += ["| class | matched | total | share |", "|---|---|---|---|"]
     for k, r in cov["by_class"].items():
         lines.append(f"| {k} | {r['matched']} | {r['total']} | {r['share']:.1%} |")

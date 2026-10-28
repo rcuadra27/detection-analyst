@@ -223,3 +223,33 @@ naming differences show up rather than hiding as missed flows.
 
 Zeek 8 also writes these protocols to `conn.log` as `unknown_transport`; those
 rows are dropped so nothing is counted twice.
+
+### Dev check after the coverage path (capture 10)
+
+| criterion | threshold | run 1 | now |
+|---|---|---|---|
+| decision agreement | >= 95% | 98.3% | 99.4% |
+| recall change | within 3 points | -1.5 | -1.3 |
+| FPR change | within 2 points | +1.4 | +0.2 |
+| worst class coverage | >= 90% | 48% (backdoor) | 95% (dos) |
+
+- Grouping rule: 60 s idle / 60 s max reproduced 85% of UNSW's other-protocol
+  flows with the right packet count; every other rule was at 41% or below.
+- Duplicates: 39,295 records are 38,290 distinct flows. 21 flows carry
+  conflicting labels and account for 329 records (about 15 copies each).
+- ARP coverage is 82% (102 of 125); the rest is unexplained.
+
+These numbers come from the capture the fixes were built on, so they are not
+the verdict. One more change before validation: other-protocol coverage now
+requires the protocol name to agree. A protocol sweep hits one host with many
+protocols in the same second, and the name table showed a `pim` flow paired
+with a `mobile` record. Without the name check, sweep coverage could be
+counted against the wrong records.
+
+## Validation protocol (set before running)
+
+- Calibrate on capture 1, validate on capture 20. Capture 20 has not been run
+  through any part of the pipeline.
+- Same decision rule as above, unchanged.
+- No code change between seeing the capture 20 result and recording it. The
+  result goes into this file and the README whichever way it lands.
