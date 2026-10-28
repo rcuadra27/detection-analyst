@@ -350,6 +350,14 @@ Found along the way:
   scored the same traffic benign oriented the other way (0.003). Direction is
   something an attacker can influence; not yet measured systematically.
 
+**Uploads (Phase A, part 2).** `src/ingest/score.py` turns any pcap into the
+store the agent reads, and the web page accepts uploads up to 2 GB: on Cloud Run
+the browser puts the file straight into a bucket and a Cloud Run Job scores it. Each capture gets its own
+false-positive baseline for the noise check, estimated without labels, because
+the benign rate on real captures (0.0-0.3%) is far below the 6.9% measured on
+UNSW's test split. Design, limits and the baseline's validation rule:
+[docs/upload.md](docs/upload.md).
+
 ## 7. Repository layout
 
 ```
@@ -395,10 +403,13 @@ src/
     ├── zeek_run.py        runs Zeek on a pcap, loads JSON logs
     ├── features.py        Zeek logs -> the detector's 42 features, with provenance
     ├── other.py           groups other-protocol packets into flows
-    └── parity.py          Zeek vs UNSW on the same flows: coverage, agreement, detection
+    ├── parity.py          Zeek vs UNSW on the same flows: coverage, agreement, detection
+    ├── score.py           any pcap -> the agent's store (flows.jsonl, meta.json)
+    ├── job.py             scores one upload (thread locally, Cloud Run Job in the cloud)
+    └── baseline.py        false-positive rate estimated from the capture; its validation
 
 .claude/skills/            investigate-event, disambiguate-hypotheses, write-incident-report
-tests/                     117 pytest tests (no API key; ingest tests on a synthetic pcap need Zeek)
+tests/                     135 pytest tests (no API key; ingest and upload tests on synthetic pcaps need Zeek)
 docs/                      architecture diagram + example triage visuals
 data/scenario/             pre-scored dev investigation day (flows.jsonl, meta.json, truth.json)
 data/scenario_heldout/     held-out day v1, same files

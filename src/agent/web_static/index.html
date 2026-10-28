@@ -32,6 +32,17 @@
     outline: 2px solid var(--accent); outline-offset: 2px; }
   .mono { font-family: var(--mono); font-size: .93em; }
   .hidden { display: none !important; }
+  .upload-row { display: flex; gap: 8px; align-items: center; padding: 0 18px 12px; flex-wrap: wrap; }
+  .upload-row .hint { color: var(--muted); font-size: 12px; }
+  .dataset { margin: 0 18px 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px;
+             background: var(--sunken); font-size: 12.5px; color: var(--ink); }
+  .dataset b { font-weight: 600; }
+  .dataset .muted { color: var(--muted); }
+  .dataset button { margin-top: 6px; }
+  .uploads { display: flex; flex-direction: column; gap: 6px; padding: 0 18px 12px; }
+  .uploads:empty { display: none; }
+  .uploads .up { text-align: left; font-size: 12.5px; }
+  .uploads .muted { color: var(--muted); }
 
   /* ---------- top bar ---------- */
   .top { display: flex; align-items: center; gap: 16px; padding: 0 20px; height: 56px;
@@ -197,7 +208,7 @@
 <div id="app" class="hidden">
   <header class="top">
     <div class="brand"><span class="mark"></span>Detection Analyst</div>
-    <div class="scenario">Simulated day of traffic, scored by the trained detector</div>
+    <div class="scenario" id="scenarioLabel">Simulated day of traffic, scored by the trained detector</div>
     <div class="spacer"></div>
     <div class="who"><span id="who"></span><br><span id="left"></span></div>
     <button class="btn" id="newChat">New chat</button>
@@ -206,8 +217,15 @@
     <aside>
       <div class="rail-head">
         <h2>Alerts</h2>
-        <p>Hosts the detector flagged today. These are leads, not verdicts.</p>
+        <p id="railSub">Hosts the detector flagged today. These are leads, not verdicts.</p>
       </div>
+      <div class="upload-row">
+        <button class="btn" id="uploadBtn">Upload a pcap</button>
+        <span class="hint" id="uploadHint">Your own capture, scored the same way</span>
+        <input type="file" id="pcap" accept=".pcap,.pcapng,.cap" hidden>
+      </div>
+      <div id="myUploads" class="uploads"></div>
+      <div id="dataset" class="dataset hidden"></div>
       <div id="events"><div class="rail-note">Loading alerts…</div></div>
       <div class="rail-note">The agent reads this data through six read-only tools. It can recommend actions but cannot block or change anything.</div>
     </aside>
@@ -233,6 +251,12 @@ const STARTERS = [
 ];
 let code = sessionStorage.getItem("da_code") || "";
 let sessionId = null, busy = false;
+let dataset = null;   // {dataset, name, n_flows, n_flagged, false_positive_rate, ...} when on an upload
+const UPLOAD_STARTERS = [
+  "What are the most serious events in this capture?",
+  "Which flagged hosts look like detector noise, and which do not?",
+  "Write a short report on this capture.",
+];
 const $ = (id) => document.getElementById(id);
 
 async function api(path, opts = {}) {
@@ -278,7 +302,7 @@ async function login() {
     sessionStorage.setItem("da_code", code);
     $("who").textContent = r.tester;
     $("login").classList.add("hidden"); $("app").classList.remove("hidden");
-    loadEvents(); await newChat();
+    loadEvents(); loadUploads(true); await newChat();
   } catch (e) {
     $("loginErr").textContent = e.status === 401 ? "That code isn't recognized. Check it and try again." : e.message;
     $("loginErr").classList.remove("hidden"); sessionStorage.removeItem("da_code");
@@ -288,7 +312,11 @@ async function login() {
 /* ---------- alert rail: one row per host ---------- */
 async function loadEvents() {
   try {
-    const r = await api("/api/events");
+    const r = await api("/api/events" + (dataset ? `?dataset=${encodeURIComponent(dataset.dataset)}` : ""));
+    if (!r.events.length) {
+      $("events").innerHTML = '<div class="rail-note">No host crossed the alert threshold in this data.</div>';
+      return;
+    }
     const hosts = new Map();
     for (const e of r.events) {
       const h = hosts.get(e.source) || { ...e, windows: [], flows: 0 };
@@ -312,17 +340,109 @@ async function loadEvents() {
   } catch (e) { $("events").innerHTML = '<div class="rail-note">Alerts could not be loaded. Reload the page to try again.</div>'; }
 }
 
+/* ---------- uploads ---------- */
+function pct(x) { return x == null ? "?" : (x * 100).toFixed(x < 0.01 ? 2 : 1) + "%"; }
+
+function showDataset() {
+  const box = $("dataset");
+  if (!dataset) {
+    box.classList.add("hidden");
+    $("scenarioLabel").textContent = "Simulated day of traffic, scored by the trained detector";
+    $("railSub").textContent = "Hosts the detector flagged today. These are leads, not verdicts.";
+    return;
+  }
+  $("scenarioLabel").textContent = `Uploaded capture: ${dataset.name}`;
+  $("railSub").textContent = "Hosts the detector flagged in your capture. These are leads, not verdicts.";
+  box.innerHTML = `<b>${esc(dataset.name)}</b><br>
+    <span class="muted">${dataset.n_flows} flows, ${dataset.n_flagged} flagged.
+    Noise baseline ${pct(dataset.false_positive_rate)} (${esc(dataset.false_positive_rate_source)}).</span><br>
+    <button class="btn" id="backDemo">Back to the demo day</button>`;
+  box.classList.remove("hidden");
+  $("backDemo").onclick = async () => { if (busy) return; dataset = null; showDataset(); loadEvents(); await newChat(); };
+}
+
+const PCAP_MAGIC = ["d4c3b2a1", "a1b2c3d4", "4d3cb2a1", "a1b23c4d", "0a0d0d0a"];
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function putFile(target, f, onProgress) {
+  // Locally the file goes through the app; on Cloud Run straight to the bucket
+  // with a signed URL, so the app's 32 MB request cap never applies.
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(target.method, target.url);
+    for (const [k, v] of Object.entries(target.headers || {})) xhr.setRequestHeader(k, v);
+    if (target.via_app) xhr.setRequestHeader("X-Access-Code", code);
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(Math.round(100 * e.loaded / e.total)); };
+    xhr.onload = () => xhr.status < 300 ? resolve() : reject(new Error(`upload refused (${xhr.status})`));
+    xhr.onerror = () => reject(new Error("the upload was interrupted"));
+    xhr.send(f);
+  });
+}
+
+async function waitScored(id, name, t0) {
+  for (;;) {
+    await sleep(3000);
+    const r = await api(`/api/uploads/${id}`);
+    if (r.state === "done" || r.state === "error") return r;
+    const mins = Math.floor((Date.now() - t0) / 60000), secs = Math.floor((Date.now() - t0) / 1000) % 60;
+    $("uploadHint").textContent = `${name}: ${r.stage || r.state} (${mins}:${String(secs).padStart(2, "0")})`;
+  }
+}
+
+async function openUpload(rec) {
+  dataset = { ...rec.summary }; showDataset();
+  await loadEvents(); await newChat();
+}
+
+async function loadUploads(setHint = false) {
+  try {
+    const r = await api("/api/uploads");
+    // Only at sign-in: later refreshes must not overwrite an upload's message.
+    if (setHint) $("uploadHint").textContent = `Your own capture, up to ${r.max_upload_mb} MB`;
+    $("myUploads").innerHTML = r.uploads.map(u => u.state === "done"
+      ? `<button class="btn up" data-id="${esc(u.dataset)}">${esc(u.name)} <span class="muted">${u.summary.n_flows} flows</span></button>`
+      : `<span class="up muted">${esc(u.name)}: ${u.state === "error" ? "failed" : "scoring…"}</span>`).join("");
+    document.querySelectorAll("#myUploads button.up").forEach(b => b.onclick = () => {
+      if (busy) return; openUpload(r.uploads.find(u => u.dataset === b.dataset.id)); });
+  } catch (e) {}
+}
+
+async function uploadPcap(f) {
+  busy = true; $("uploadBtn").disabled = true; $("send").disabled = true;
+  const t0 = Date.now();
+  try {
+    const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+    const hex = Array.from(head).map(b => b.toString(16).padStart(2, "0")).join("");
+    if (!PCAP_MAGIC.includes(hex)) throw new Error("that file is not a pcap or pcapng capture");
+    const c = await api("/api/uploads", { method: "POST", body: JSON.stringify({ name: f.name, size: f.size }) });
+    await putFile(c.upload, f, pct => { $("uploadHint").textContent = `Uploading ${f.name}: ${pct}%`; });
+    await api(`/api/uploads/${c.dataset}/start`, { method: "POST" });
+    $("uploadHint").textContent = `${f.name}: queued`;
+    const rec = await waitScored(c.dataset, f.name, t0);
+    if (rec.state === "error") throw new Error(rec.message || "scoring failed");
+    $("uploadHint").textContent = `Scored in ${Math.round((Date.now() - t0) / 1000)}s`;
+    busy = false;
+    await openUpload(rec); loadUploads();
+  } catch (e) {
+    $("uploadHint").textContent = `Upload failed: ${e.message}`;
+    loadUploads();
+  } finally {
+    busy = false; $("uploadBtn").disabled = false; if (sessionId) $("send").disabled = false;
+  }
+}
+
 /* ---------- chat ---------- */
 async function newChat() {
   $("thread").innerHTML = ""; sessionId = null; $("send").disabled = true;
   const w = node("working", "Starting a new chat…");
   try {
-    const r = await api("/api/sessions", { method: "POST" });
+    const r = await api("/api/sessions", { method: "POST",
+                                           body: JSON.stringify({ dataset: dataset ? dataset.dataset : null }) });
     w.remove();
     sessionId = r.session_id; $("send").disabled = false; $("left").textContent = `${r.questions_left} questions left`;
     const welcome = node("welcome", `<h1>What should we look into?</h1>
       <p>Ask about any host or alert. The agent investigates with read-only tools, explains its evidence, and files a triage for you to approve or reject.</p>
-      <div class="suggest">${STARTERS.map(s => `<button>${esc(s)}</button>`).join("")}</div>`);
+      <div class="suggest">${(dataset ? UPLOAD_STARTERS : STARTERS).map(s => `<button>${esc(s)}</button>`).join("")}</div>`);
     welcome.querySelectorAll(".suggest button").forEach(b => b.onclick = () => ask(b.textContent));
   } catch (e) { w.remove(); node("err", esc(e.message)); }
 }
@@ -443,6 +563,8 @@ $("q").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) 
 $("go").onclick = login;
 $("code").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
 $("newChat").onclick = () => { if (!busy) newChat(); };
+$("uploadBtn").onclick = () => { if (!busy) $("pcap").click(); };
+$("pcap").onchange = () => { const f = $("pcap").files[0]; $("pcap").value = ""; if (f) uploadPcap(f); };
 if (code) login();
 </script>
 </body>

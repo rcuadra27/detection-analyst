@@ -14,5 +14,6 @@ data/processed/*
 data/scenario/
 data/scenario_heldout/
 data/scenario_heldout2/
+data/uploads/
 logs/
 .pytest_cache/

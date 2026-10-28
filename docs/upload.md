@@ -16,7 +16,9 @@ pcap ──▶ Zeek + unsw_features.zeek ──▶ 42 features ──▶ stage 1
 | `src/ingest/score.py` | pcap -> store (`flows.jsonl`, `meta.json`), the format the simulated days use; also exports `calibration.json` |
 | `src/ingest/calibration.json` | the definitions calibration chose and the ct_state_ttl table, frozen from a parity run, so scoring needs no UNSW data |
 | `src/ingest/baseline.py` | estimates the detector's false-positive rate from the capture itself, and validates the estimate on labelled captures |
-| `src/agent/web.py`, `web_static/index.html` | upload endpoint, a rail and chats bound to the uploaded capture |
+| `src/agent/uploads.py` | where uploads go: a local folder, or a Cloud Storage bucket with signed-URL uploads |
+| `src/ingest/job.py` | scores one upload: run in a thread locally, as a Cloud Run Job in the cloud |
+| `src/agent/web.py`, `web_static/index.html` | upload endpoints, progress and status in the page, a rail and chats bound to the upload |
 
 Nothing in the agent loop, the tools' guardrails or the skills' pattern rules
 changed. HTTP method, host, URI and user agent from Zeek's http.log go into each
@@ -79,13 +81,15 @@ python -m src.ingest.baseline --eval data/processed/ingest/1 data/processed/inge
 python -m src.ingest.score --pcap capture.pcap --out data/uploads/capture
 DA_SCENARIO_DIR=data/uploads/capture python -m src.agent.cli      # chat about it in a terminal
 DA_ALLOW_NO_AUTH=1 uvicorn src.agent.web:app --port 8080          # or upload it in the page
+                                                                  # (stored under data/uploads/)
 ```
 
 ## Limits
 
-- Uploads are capped at 30 MB (Cloud Run's request limit is 32 MiB) and scored
-  inside the request, one at a time. Larger captures need a signed-URL upload to
-  Cloud Storage and a background job; not built.
+- Uploads up to 2 GB by default. On Cloud Run the file goes straight from the
+  browser to a bucket (a single request to the app is capped at 32 MiB) and a
+  Cloud Run Job scores it; locally it goes through the app and a background
+  thread scores it. Same scoring code either way. Setup: docs/deploy.md, 4b.
 - IPv4 only (UNSW-NB15 is IPv4; the Zeek script skips IPv6 packets).
 - Orientation: Zeek decides which side is the source by the first packet. On
   parity run 2 the detector flagged one direction of the same traffic and not

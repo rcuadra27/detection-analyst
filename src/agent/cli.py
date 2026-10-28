@@ -92,14 +92,20 @@ def use_scenario(name: str) -> Path:
 
 
 @asynccontextmanager
-async def connect_mcp(session_id: str):
-    """Launch the MCP server as a subprocess over stdio and open a client session."""
+async def connect_mcp(session_id: str, scenario_dir: str | Path | None = None):
+    """Launch the MCP server as a subprocess over stdio and open a client session.
+
+    `scenario_dir` points this session's tools at another store (an uploaded
+    capture); by default they read DA_SCENARIO_DIR or data/scenario."""
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
+    env = {**os.environ, "DA_SESSION_ID": session_id}
+    if scenario_dir is not None:
+        env["DA_SCENARIO_DIR"] = str(Path(scenario_dir).resolve())
     params = StdioServerParameters(
         command=sys.executable, args=["-m", "src.agent.mcp_server"], cwd=str(REPO_ROOT),
-        env={**os.environ, "DA_SESSION_ID": session_id})
+        env=env)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     with open(LOG_DIR / "mcp_server.log", "a") as errlog:
         async with stdio_client(params, errlog=errlog) as (read, write):

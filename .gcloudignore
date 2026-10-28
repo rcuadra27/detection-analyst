@@ -11,6 +11,10 @@ data/*
 !data/raw/
 data/raw/*
 !data/raw/attack_techniques_cache.json
+!data/processed/
+data/processed/*
+!data/processed/stage1_binary.joblib
+!data/processed/stage2_multiclass.joblib
 !data/scenario/
 data/scenario/truth.json
 **/.DS_Store

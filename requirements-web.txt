@@ -1,6 +1,8 @@
 # Runtime dependencies for the deployed web host only (see Dockerfile).
-# The full requirements.txt also covers training, pcap parsing and the RAG
-# experiments, none of which run in the container.
+# The full requirements.txt also covers training and the RAG experiments, which
+# do not run in the container. Scoring uploaded pcaps does (in the da-score job,
+# same image): it needs the models' scikit-learn, the same version they were
+# trained with, and the Cloud Storage and auth clients for the bucket and the job.
 anthropic==0.117.0
 mcp==1.27.0
 pydantic==2.13.4
@@ -9,3 +11,8 @@ pandas==3.0.3
 python-dotenv==1.2.2
 fastapi==0.143.0
 uvicorn==0.54.0
+scikit-learn==1.9.0
+joblib==1.5.3
+google-cloud-storage==3.17.1
+google-auth==2.62.0
+requests==2.34.2
