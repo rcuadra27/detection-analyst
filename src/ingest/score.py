@@ -36,13 +36,13 @@ MODEL_DIR = Path("data/processed")
 THRESHOLD = 0.85
 FALLBACK_FALSE_POSITIVE_RATE = 0.069    # UNSW test split
 # The per-capture estimate (baseline.py) failed its first validation, which turned
-# out to use the wrong reference (docs/upload.md). It stays off until it passes
-# rule v2 on fresh captures; until then uploads use the stated default. The
-# estimate is still computed and stored in meta["baseline"].
-USE_CAPTURE_ESTIMATE = False
-FALLBACK_SOURCE = ("UNSW test split; on UNSW captures scored through Zeek, innocent hosts "
-                   "were flagged at 0-0.003%, so this reference is very lenient "
-                   "(per-capture estimate disabled until it passes validation)")
+# out to use the wrong reference, then passed rule v2 on two fresh captures
+# (docs/upload.md). Uploads use its 95% upper bound. The 6.9% default remains for
+# captures where no estimate is possible (no host with enough flows).
+USE_CAPTURE_ESTIMATE = True
+FALLBACK_SOURCE = ("UNSW test split, used because this capture had too little traffic to "
+                   "estimate its own rate; on UNSW captures scored through Zeek innocent "
+                   "hosts were flagged at 0-0.003%, so this reference is very lenient")
 
 # Columns copied into each flow's evidence, under the names the scenario uses.
 _EVIDENCE = (("proto", "proto"), ("service", "service"), ("state", "state"),

@@ -353,12 +353,12 @@ Found along the way:
 **Uploads (Phase A, part 2).** `src/ingest/score.py` turns any pcap into the
 store the agent reads, and the web page accepts uploads up to 2 GB: on Cloud Run
 the browser puts the file straight into a bucket and a Cloud Run Job scores it.
-A per-capture false-positive baseline for the noise check was built and failed
-its first validation, which turned out to use the wrong reference: every flagged
-"benign" flow came from attack hosts' normal-labelled traffic, while innocent
-hosts were flagged at 0-0.003% (the estimator said ~0.0015%). The estimate stays
-off until it passes a corrected rule on fresh captures; uploads use the 6.9%
-default meanwhile, labelled as very lenient. Details: [docs/upload.md](docs/upload.md).
+Each capture gets its own false-positive baseline for the noise check,
+estimated without labels. Its first validation failed against the wrong
+reference (attack hosts' normal-labelled traffic); against innocent hosts it
+then passed a rule set beforehand on two fresh captures (true rate 0%, upper
+bound 0.007%). UNSW cannot test the hard case, an innocent host the detector
+keeps flagging. Details: [docs/upload.md](docs/upload.md).
 
 ## 7. Repository layout
 

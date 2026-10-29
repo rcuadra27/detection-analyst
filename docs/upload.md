@@ -222,3 +222,34 @@ python -m src.ingest.baseline --eval data/processed/ingest/feb<a> data/processed
                data/raw/UNSW-NB15_3.csv data/raw/UNSW-NB15_4.csv \
     --out data/processed/baseline_eval_v2.json
 ```
+
+## Rule v2 result: pass on two fresh captures; estimate switched on
+
+17-2-2015 captures 5 and 25, neither used before in this project. Selection
+rule checked from the UNSW CSV before the pipeline: 2,771 and 22,096 attack
+records in their spans (>= 500 required).
+
+| capture | innocent hosts flagged | true rate | upper bound | (a) | (b) | verdict |
+|---|---|---|---|---|---|---|
+| 5 | 0 of 35,077 | 0% | 0.0072% | ok | ok | pass |
+| 25 | 0 of 36,675 | 0% | 0.0068% | ok | ok | pass |
+
+Process note: the first run on these two captures used code without rule v2
+(patch not yet applied) and printed the old reference only. The rule v2 measure
+had not been computed when the corrected code ran; no code changed between the
+two runs.
+
+**Action:** uploads use the estimate's upper bound as the noise reference
+(`USE_CAPTURE_ESTIMATE = True` in `score.py`). The 6.9% default remains only for
+captures with too little traffic to estimate. Because the reference is an upper
+bound, the noise check's times-rate figure is a lower bound, and the skill tells
+the agent to say "at least N times".
+
+**What the pass shows, and what it does not:** on traffic it was not built on,
+the estimator measures the innocent-host rate and is not pulled up by attack
+hosts. Both captures had a true rate of zero, so the test checks one side
+sharply (not too lenient: the upper bound stays near 0.007%) and the other only
+trivially. It says nothing about a network where innocent hosts are flagged
+now and then; there, a reference this low would escalate a host for a few
+stray flags. That case needs data UNSW does not have (e.g. CIC-IDS2017), and in
+the long run per-host history from live monitoring (Phase C).
