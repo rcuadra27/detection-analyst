@@ -133,4 +133,64 @@ caffeinate -i python -m src.ingest.cic_eval --day Monday \
 
 ## Results
 
-(none yet)
+### Monday (benign only), threshold 0.85
+
+| | production | no_ttl |
+|---|---|---|
+| Rule 0: labels attached | PASS: 99.9% matched, offset +3 h (margin 833×) | same |
+| Rule 1: innocent flows flagged | **55.5%**: FAIL | **15.2%**: FAIL |
+| Rule 2: baseline (true / upper) | FAIL | 15.2% / 8.5%: FAIL (too strict) |
+| Innocent hosts an analyst would see | | 8 |
+
+- Prediction 1 held in direction, not size: fail, but 55% instead of the ~10% the
+  swap test suggested. With TTL removed it is 15%, spread across ordinary
+  traffic (DNS 15%, SSL 14%, HTTP 10%, unidentified services 41%), mostly
+  flagged as exploits (30k) or generic (18k). The busiest innocent host is the
+  domain controller 192.168.10.3 (DNS, NetBIOS), 22% flagged.
+- Prediction 2 failed: the baseline estimate is below the true rate, because no
+  host is clean enough to anchor it. Wrong in the strict direction.
+- **Ablation adoption rule: not met.** Part 1 (UNSW) passed: attack recall
+  93.11% → 92.05%, normal flagged 6.85% → 6.77%, and the swap test is flat (92%
+  of attacks caught at sttl 31, was 0.2%). Part 2 (CIC Monday ≥ 5× better or
+  ≤ 0.1%) failed: 3.6×. Whether to adopt no_ttl as a security fix (it closes the
+  TTL-31 evasion and is no worse anywhere measured) is a separate decision,
+  recorded separately, not a pass.
+
+### Monday score distribution, no_ttl
+
+| threshold | Monday flagged |
+|---|---|
+| 0.85 | 15.228% |
+| 0.95 | 6.151% |
+| 0.99 | 1.135% |
+| 0.995 | 0.445% |
+| 0.999 | 0.029% |
+
+Monday's flows score high (median 0.23, 90th percentile 0.91), but the top
+0.1% is thin enough that a cutoff of 0.999 would be "usable" on Monday. That is
+in-sample: the threshold was read off Monday, so Monday cannot judge it.
+
+## Learning-period threshold (frozen before Friday is scored)
+
+The idea production systems use: learn what normal looks like on this network
+first, then alert only above it. Here, the threshold is set from a benign day of
+the same network and tested on the other days.
+
+- **Model and threshold:** no_ttl at **0.999**, chosen on Monday, frozen.
+- **Rule L1 (false alarms, held out):** innocent-host flag rate on each attack
+  day, at 0.999, judged by the rule 1 bands.
+- **Rule L2 (detection):** per attack, reported as in rule 3. The approach is
+  **viable** if, on Friday, DDoS and PortScan are each detected and at least
+  half of their flows are flagged at 0.999; **not viable** otherwise.
+- **Prediction:** L1 degraded rather than usable (other days carry traffic
+  Monday did not); DDoS detected, PortScan weaker (scan probes are tiny flows
+  that look like ordinary failed connections).
+
+```
+caffeinate -i python -m src.ingest.cic_eval --day Friday \
+    --pcap data/raw/cic2017/pcap/Friday-WorkingHours.pcap \
+    --csv-dir "data/raw/cic2017/csv/TrafficLabelling " --out data/processed/cic2017/friday
+python -m src.ingest.cic_eval --day Friday --pcap data/raw/cic2017/pcap/Friday-WorkingHours.pcap \
+    --csv-dir "data/raw/cic2017/csv/TrafficLabelling " --out data/processed/cic2017/friday \
+    --models data/processed/ablation/no_ttl --threshold 0.999
+```

@@ -366,6 +366,9 @@ def main() -> None:
     ap.add_argument("--models", type=Path,
                     help="re-score the saved features with these models (e.g. "
                          "data/processed/ablation/no_ttl) instead of production; no Zeek")
+    ap.add_argument("--threshold", type=float,
+                    help="stage-1 cutoff for re-scoring (default 0.85); with no --models, "
+                         "re-scores with the production models")
     ap.add_argument("--tag", help="suffix for the report and results files (default: the "
                                   "models folder name)")
     a = ap.parse_args()
@@ -380,14 +383,18 @@ def main() -> None:
     feats = pd.read_csv(out / "features.csv.gz", low_memory=False)
     meta = json.loads((out / "meta.json").read_text())
     suffix = ""
-    if a.models:
-        feats, meta = rescore(feats, a.models)
-        suffix = "_" + (a.tag or a.models.name)
-        print(f"[cic] re-scored with {a.models}: {int(feats['alert'].sum()):,} flagged")
+    if a.models or a.threshold is not None:
+        models = a.models or Path("data/processed")
+        t = 0.85 if a.threshold is None else a.threshold
+        feats, meta = rescore(feats, models, t)
+        name = a.models.name if a.models else "production"
+        suffix = "_" + (a.tag or (name if a.threshold is None else f"{name}_t{t:g}"))
+        print(f"[cic] re-scored with {models} at {t:g}: {int(feats['alert'].sum()):,} flagged")
     cic = load_labels(day_csvs(a.csv_dir, a.day))
     print(f"[cic] {len(feats):,} Zeek flows, {len(cic):,} CIC rows; matching")
     res = evaluate(feats, meta, cic)
     res["models"] = str(a.models) if a.models else "production"
+    res["threshold"] = 0.85 if a.threshold is None else a.threshold
     (out / f"results{suffix}.json").write_text(json.dumps(res, indent=1, default=str))
     write_report(res, a.day + (f" ({suffix[1:]})" if suffix else ""), out, f"report{suffix}.md")
     r0, r1, r2 = res["rule0_labels_attached"], res["rule1_false_alarms"], res["rule2_baseline"]
