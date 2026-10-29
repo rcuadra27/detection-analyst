@@ -12,7 +12,7 @@ import pytest
 from src.agent.store import SCENARIO_DIRS, DetectionStore
 from src.agent.tools import DETECTOR_FALSE_POSITIVE_RATE, MAX_EVENTS_LISTED, InvestigationSession
 
-NOISE_LINE = 0.2      # pairs.md, Step 0
+NOISE_MULTIPLE = 3    # pairs.md, Step 0: under 3x the false-positive rate is noise
 
 ATTACK_HOSTS = {"dev": ["10.0.3.57", "10.0.5.14", "10.0.8.23"],
                 "heldout": ["172.16.12.40", "172.16.30.8", "172.16.22.9"],
@@ -31,18 +31,23 @@ def frac(s: InvestigationSession, host: str) -> float:
     return s.get_host_activity(host)["noise_check"]["suspicious_fraction_in_active_windows"]
 
 
+def times_rate(s: InvestigationSession, host: str) -> float:
+    return s.get_host_activity(host)["noise_check"]["times_false_positive_rate"]
+
+
 @pytest.mark.parametrize("name", ["dev", "heldout", "heldout2"])
 def test_noise_check_separates_attacks_from_benign_noise(name):
     s = session(name)
     for h in ATTACK_HOSTS[name]:
-        assert frac(s, h) >= NOISE_LINE, h
+        assert times_rate(s, h) >= NOISE_MULTIPLE, h
     for h in BENIGN_HOSTS[name]:
-        assert frac(s, h) < NOISE_LINE, h
+        assert times_rate(s, h) < NOISE_MULTIPLE, h
 
 
 def test_busy_worm_stays_on_the_attack_side():
     # the case most likely to be wrongly dismissed by the noise rule
-    assert NOISE_LINE <= frac(session("heldout2"), "172.24.8.15") < 0.8
+    s = session("heldout2")
+    assert times_rate(s, "172.24.8.15") >= NOISE_MULTIPLE and frac(s, "172.24.8.15") < 0.8
 
 
 def test_noise_check_reports_the_reference_rate():
@@ -50,6 +55,25 @@ def test_noise_check_reports_the_reference_rate():
     assert n["detector_false_positive_rate"] == DETECTOR_FALSE_POSITIVE_RATE
     assert n["times_false_positive_rate"] == pytest.approx(
         n["suspicious_fraction_in_active_windows"] / DETECTOR_FALSE_POSITIVE_RATE, abs=0.1)
+
+
+def test_a_store_with_its_own_baseline_uses_it():
+    """An uploaded capture carries its own false-positive estimate; the same flagged
+    share is then read against that rate, not UNSW's 6.9%."""
+    from src.agent.store import FlowRecord
+    flows = [FlowRecord(f"f{i}", "10.1.1.1", "10.1.1.2", 80, 100.0 + i,
+                        0.95 if i < 3 else 0.01, {"exploits": 1.0}) for i in range(30)]
+    shared = {"threshold": 0.85}
+    default = InvestigationSession(DetectionStore(flows, dict(shared)))
+    own = InvestigationSession(DetectionStore(flows, {**shared, "false_positive_rate": 0.002,
+                                                      "false_positive_rate_source": "estimated"}))
+    a = default.get_host_activity("10.1.1.1")["noise_check"]
+    b = own.get_host_activity("10.1.1.1")["noise_check"]
+    assert a["suspicious_fraction_in_active_windows"] == b["suspicious_fraction_in_active_windows"] == 0.1
+    assert a["times_false_positive_rate"] < NOISE_MULTIPLE          # 10% vs 6.9%: noise
+    assert b["times_false_positive_rate"] >= NOISE_MULTIPLE         # 10% vs 0.2%: not noise
+    assert b["false_positive_rate_source"] == "estimated" and b["flagged_expected_by_chance"] == 0.1
+    assert "0.20%" in b["how_to_read"]
 
 
 def test_list_events_says_when_it_is_truncated():

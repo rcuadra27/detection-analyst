@@ -15,6 +15,12 @@ What changes from the CLI, and what does not:
     a Cloud Run instance's disk does not survive a restart.
   - Spend is capped in code: a daily token budget, a question cap per session,
     and a cap on concurrent sessions.
+  - Testers can upload a pcap of up to DA_MAX_UPLOAD_MB (2 GB by default). The
+    file never passes through this app on Cloud Run: the browser puts it straight
+    into a bucket with a signed URL, and a Cloud Run Job scores it (Zeek features,
+    the trained detector, a baseline estimated from the capture). Chats started on
+    an upload read its store. Uploads are private to the tester who sent them.
+    See src/agent/uploads.py.
 
 Run ONE worker process: sessions live in memory.
 """
@@ -31,11 +37,12 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from src.agent.cli import DEFAULT_MODEL, LOG_DIR, REPO_ROOT, Agent, AgentTurn, connect_mcp
+from src.agent.uploads import LocalBackend, backend_from_env
 
 STATIC_DIR = Path(__file__).resolve().parent / "web_static"
 EVENTS_LOG = LOG_DIR / "web_events.jsonl"
@@ -46,6 +53,8 @@ SESSION_IDLE_SECONDS = int(os.environ.get("DA_SESSION_IDLE_SECONDS", "1800"))
 MAX_QUESTIONS_PER_SESSION = int(os.environ.get("DA_MAX_QUESTIONS_PER_SESSION", "25"))
 DAILY_TOKEN_BUDGET = int(os.environ.get("DA_DAILY_TOKEN_BUDGET", "5000000"))
 MAX_QUESTION_CHARS = 2000
+MAX_UPLOADS_PER_TESTER = int(os.environ.get("DA_MAX_UPLOADS_PER_TESTER", "5"))
+MAX_UPLOAD_NAME = 80
 MAX_LOGGED_ANSWER_CHARS = 4000
 
 
@@ -133,9 +142,11 @@ class ChatSession:
     The MCP client must be opened and closed by the same task, so each session runs
     in one long-lived worker task and receives questions through a queue."""
 
-    def __init__(self, session_id: str, tester: str, llm, model: str):
+    def __init__(self, session_id: str, tester: str, llm, model: str,
+                 scenario_dir: Path | None = None):
         self.id = session_id
         self.tester = tester
+        self.scenario_dir = scenario_dir
         self.llm = llm
         self.model = model
         self.queue: asyncio.Queue = asyncio.Queue()
@@ -154,7 +165,7 @@ class ChatSession:
 
     async def run(self) -> None:
         try:
-            async with connect_mcp(self.id) as mcp_session:
+            async with connect_mcp(self.id, self.scenario_dir) as mcp_session:
                 agent = Agent(mcp_session, self.llm, model=self.model, session_id=self.id,
                               on_event=self._on_event)
                 await agent.setup()
@@ -209,20 +220,23 @@ class SessionManager:
         self.idle_seconds = idle_seconds
         self.sessions: dict[str, ChatSession] = {}
 
-    async def create(self, tester: str) -> ChatSession:
+    async def create(self, tester: str, scenario_dir: Path | None = None,
+                     dataset: str | None = None) -> ChatSession:
         if len(self.sessions) >= self.max_sessions:
             idle = [s for s in self.sessions.values() if not s.busy]
             if not idle:
                 raise HTTPException(503, "All chat slots are busy. Try again in a minute.")
             await self.end(min(idle, key=lambda s: s.last_used).id, reason="evicted")
-        s = ChatSession(f"web-{uuid.uuid4().hex[:10]}", tester, self.llm_factory(), self.model)
+        s = ChatSession(f"web-{uuid.uuid4().hex[:10]}", tester, self.llm_factory(), self.model,
+                        scenario_dir)
         s.task = asyncio.create_task(s.run())
         self.sessions[s.id] = s
         await s.ready.wait()
         if s.start_error:
             self.sessions.pop(s.id, None)
             raise HTTPException(500, "The tools server failed to start. See the logs.")
-        log_event("session_start", session=s.id, tester=tester, model=self.model)
+        log_event("session_start", session=s.id, tester=tester, model=self.model,
+                  dataset=dataset or "demo")
         return s
 
     def get(self, session_id: str, tester: str) -> ChatSession:
@@ -282,6 +296,15 @@ def summarize_turn(turn: AgentTurn) -> dict:
 
 # ------------------------------------------------------------------ request bodies
 
+class UploadBody(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    size: int
+
+
+class SessionBody(BaseModel):
+    dataset: str | None = None
+
+
 class AskBody(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
 
@@ -311,7 +334,7 @@ def _default_llm_factory():
 
 def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
                model: str = DEFAULT_MODEL, daily_token_budget: int = DAILY_TOKEN_BUDGET,
-               max_sessions: int = MAX_SESSIONS) -> FastAPI:
+               max_sessions: int = MAX_SESSIONS, upload_backend=None) -> FastAPI:
     os.chdir(REPO_ROOT)
     codes = parse_access_codes(os.environ.get("DA_ACCESS_CODES")) if access_codes is None \
         else access_codes
@@ -352,16 +375,117 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
     def login(body: LoginBody):
         return {"tester": access.tester(body.code)}
 
+    uploads = upload_backend if upload_backend is not None else backend_from_env()
+
+    def owned(ds_id: str, tester: str, need_done: bool = False) -> dict:
+        rec = uploads.read_status(ds_id) if ds_id.startswith("up-") else None
+        if rec is None or rec.get("tester") != tester:
+            raise HTTPException(404, "Unknown upload.")
+        if need_done and rec.get("state") != "done":
+            raise HTTPException(409, "That upload is not scored yet.")
+        return rec
+
     @app.get("/api/events")
-    def events(x_access_code: str | None = Header(default=None)):
-        access.tester(x_access_code)
+    def events(dataset: str | None = None, x_access_code: str | None = Header(default=None)):
+        tester = access.tester(x_access_code)
+        if dataset:
+            owned(dataset, tester, need_done=True)
+            return _events_panel(uploads.local_store(dataset))
         return _events_panel()
 
-    @app.post("/api/sessions")
-    async def new_session(x_access_code: str | None = Header(default=None)):
+    @app.get("/api/uploads")
+    def list_uploads(x_access_code: str | None = Header(default=None)):
         tester = access.tester(x_access_code)
-        s = await manager.create(tester)
-        return {"session_id": s.id, "questions_left": MAX_QUESTIONS_PER_SESSION}
+        mine = [_public(r) for r in uploads.list_status() if r.get("tester") == tester]
+        return {"uploads": sorted(mine, key=lambda r: r.get("created", ""), reverse=True),
+                "max_upload_mb": uploads.max_bytes // 2**20}
+
+    @app.post("/api/uploads")
+    def create_upload(body: UploadBody, x_access_code: str | None = Header(default=None)):
+        """Step 1: register an upload and get somewhere to put the file."""
+        tester = access.tester(x_access_code)
+        if body.size > uploads.max_bytes:
+            raise HTTPException(413, f"Captures are limited to {uploads.max_bytes // 2**20} MB.")
+        if body.size <= 0:
+            raise HTTPException(422, "The file is empty.")
+        active = [r for r in uploads.list_status()
+                  if r.get("tester") == tester and r.get("state") != "error"]
+        if len(active) >= MAX_UPLOADS_PER_TESTER:
+            raise HTTPException(429, f"Upload limit reached ({MAX_UPLOADS_PER_TESTER} per tester).")
+        ds_id = f"up-{uuid.uuid4().hex[:10]}"
+        rec = {"dataset": ds_id, "tester": tester, "name": Path(body.name).name[:MAX_UPLOAD_NAME],
+               "size": body.size, "state": "waiting_upload", "created": _utcnow(),
+               "updated": _utcnow()}
+        uploads.write_status(ds_id, rec)
+        log_event("upload_created", tester=tester, dataset=ds_id, name=rec["name"], bytes=body.size)
+        return {"dataset": ds_id, "upload": uploads.upload_target(ds_id)}
+
+    @app.put("/api/uploads/{ds_id}/data")
+    async def upload_data(ds_id: str, request: Request,
+                          x_access_code: str | None = Header(default=None)):
+        """Step 2, local backend only: the file itself, streamed to disk.
+        (On Cloud Run the browser sends it straight to the bucket instead.)"""
+        tester = access.tester(x_access_code)
+        rec = owned(ds_id, tester)
+        if not isinstance(uploads, LocalBackend):
+            raise HTTPException(404, "Upload the file to the signed URL.")
+        if rec.get("state") != "waiting_upload":
+            raise HTTPException(409, "This upload already has its file.")
+        dest = uploads.pcap_path(ds_id)
+        size = 0
+        with dest.open("wb") as fh:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > uploads.max_bytes:
+                    fh.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(413, f"Captures are limited to {uploads.max_bytes // 2**20} MB.")
+                fh.write(chunk)
+        return {"ok": True, "bytes": size}
+
+    @app.post("/api/uploads/{ds_id}/start")
+    def start_upload(ds_id: str, x_access_code: str | None = Header(default=None)):
+        """Step 3: the file is in place; score it."""
+        tester = access.tester(x_access_code)
+        rec = owned(ds_id, tester)
+        if rec.get("state") != "waiting_upload":
+            raise HTTPException(409, f"This upload is already {rec.get('state')}.")
+        uploads.update_status(ds_id, state="queued", stage="waiting for the scoring job")
+        try:
+            uploads.start(ds_id)
+        except Exception as exc:
+            uploads.update_status(ds_id, state="error", stage=None,
+                                  message="The scoring job could not be started.")
+            log_event("upload_failed", severity="ERROR", tester=tester, dataset=ds_id,
+                      error=f"{type(exc).__name__}: {exc}"[:2000])
+            raise HTTPException(502, "The scoring job could not be started.")
+        log_event("upload_started", tester=tester, dataset=ds_id)
+        return _public(uploads.read_status(ds_id))
+
+    @app.get("/api/uploads/{ds_id}")
+    def upload_status(ds_id: str, x_access_code: str | None = Header(default=None)):
+        """Step 4: poll until state is done or error."""
+        rec = owned(ds_id, access.tester(x_access_code))
+        if rec.get("state") in ("done", "error") and not rec.get("logged"):
+            log_event("upload_done" if rec["state"] == "done" else "upload_failed",
+                      severity="INFO" if rec["state"] == "done" else "ERROR",
+                      tester=rec["tester"], dataset=ds_id, name=rec.get("name"),
+                      summary=rec.get("summary"), message=rec.get("message"))
+            uploads.update_status(ds_id, logged=True)
+        return _public(rec)
+
+    @app.post("/api/sessions")
+    async def new_session(body: SessionBody | None = None,
+                          x_access_code: str | None = Header(default=None)):
+        tester = access.tester(x_access_code)
+        dataset = body.dataset if body else None
+        scenario_dir = None
+        if dataset:
+            owned(dataset, tester, need_done=True)
+            scenario_dir = uploads.local_store(dataset)
+        s = await manager.create(tester, scenario_dir, dataset)
+        return {"session_id": s.id, "questions_left": MAX_QUESTIONS_PER_SESSION,
+                "dataset": dataset}
 
     @app.get("/api/sessions/{session_id}/progress")
     def progress(session_id: str, x_access_code: str | None = Header(default=None)):
@@ -464,10 +588,23 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
 
     app.state.manager = manager
     app.state.budget = budget
+    app.state.uploads = uploads
     return app
 
 
+# ------------------------------------------------------------------ uploads
+
+def _utcnow() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def _public(rec: dict | None) -> dict:
+    """An upload record as the page sees it: no internal bookkeeping fields."""
+    return {k: v for k, v in (rec or {}).items() if k not in ("logged",)}
+
+
 _EVENTS_CACHE: dict | None = None
+_DATASET_EVENTS: dict[str, dict] = {}
 
 
 def _scenario_meta() -> dict:
@@ -476,15 +613,28 @@ def _scenario_meta() -> dict:
     return json.loads(META_PATH.read_text()) if META_PATH.exists() else {}
 
 
-def _events_panel() -> dict:
-    """Today's top events for the side panel. Read in-process, outside any chat session."""
+def _events_panel(dataset_dir: Path | None = None) -> dict:
+    """Top events for the side panel. Read in-process, outside any chat session.
+
+    Without `dataset_dir`, the demo day; with it, an uploaded capture's store."""
     global _EVENTS_CACHE
-    if _EVENTS_CACHE is None:
-        from src.agent.store import DetectionStore
-        from src.agent.tools import AuditLog, InvestigationSession
-        session = InvestigationSession(DetectionStore.load(), AuditLog(session_id="web-panel"))
-        _EVENTS_CACHE = session.list_events(limit=12)
-    return _EVENTS_CACHE
+    from src.agent.store import DetectionStore
+    from src.agent.tools import AuditLog, InvestigationSession
+    if dataset_dir is None:
+        if _EVENTS_CACHE is None:
+            session = InvestigationSession(DetectionStore.load(), AuditLog(session_id="web-panel"))
+            _EVENTS_CACHE = session.list_events(limit=12)
+        return _EVENTS_CACHE
+    key = str(dataset_dir)
+    if key not in _DATASET_EVENTS:
+        store = DetectionStore.load(Path(dataset_dir) / "flows.jsonl", Path(dataset_dir) / "meta.json")
+        out = InvestigationSession(store, AuditLog(session_id="web-panel")).list_events(limit=12)
+        m = store.meta
+        out["dataset"] = {k: m.get(k) for k in ("scenario", "n_flows", "n_flagged",
+                                                 "false_positive_rate",
+                                                 "false_positive_rate_source")}
+        _DATASET_EVENTS[key] = out
+    return _DATASET_EVENTS[key]
 
 
 def __getattr__(name: str):

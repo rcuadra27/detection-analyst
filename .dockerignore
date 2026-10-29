@@ -6,6 +6,8 @@
 !data/raw/attack_techniques_cache.json
 !data/scenario/flows.jsonl
 !data/scenario/meta.json
+!data/processed/stage1_binary.joblib
+!data/processed/stage2_multiclass.joblib
 # Never ship the answer key, secrets, logs or caches, even if a rule above changes.
 data/scenario/truth.json
 .env

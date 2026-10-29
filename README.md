@@ -318,6 +318,48 @@ unmeasured.
 
 ---
 
+## 6a. Scoring any pcap: Zeek feature parity (Phase A)
+
+The detector was trained on UNSW's published features, built with Argus and
+Bro. To score a pcap someone uploads, those 42 features are rebuilt from raw
+packets with Zeek (`src/ingest/`). A wrong definition would shift the model's
+inputs without any error, so parity was measured before building on it:
+the same flows scored through UNSW's features and through Zeek's, with
+ambiguous definitions calibrated on one capture and every result reported on
+another. Thresholds were committed before each validation run. Full record:
+[docs/parity.md](docs/parity.md).
+
+| run | validation capture | verdict | why |
+|---|---|---|---|
+| 1 | 22-1-2015 #20 | inconclusive | no attacks in the capture |
+| 2 | 17-2-2015 #20 | fail (coverage) | Zeek merged repeated UDP bursts into long flows and oriented some by first packet; traffic present, start-time matching missed it |
+| 3 | 17-2-2015 #15 | **pass** (rule v2) | decision agreement 99.6%, recall 0.864 -> 0.852, FPR 0.0019 -> 0.0014, detected attacks 93.4% -> 91.0% |
+
+Found along the way:
+
+- **Loss count.** UNSW counts the original packet with its resends, and counts
+  a repeated SYN/FIN as one. Counting resends only raised FPR about 30x; the
+  detector reads the feature mostly as zero or not zero.
+- **Other protocols.** 12% of UNSW attacks use IP protocols other than
+  TCP/UDP/ICMP (protocol sweeps), which Zeek makes no connections for. A
+  second path logs those packets and groups them into flows (60 s idle, 60 s
+  max, chosen by calibration).
+- **Duplicated records.** UNSW writes some flows several times with different
+  attack labels (one flow, four records: analysis, backdoor, exploits, dos).
+- **Orientation.** On run 2, the detector flagged a flow one way (0.961) and
+  scored the same traffic benign oriented the other way (0.003). Direction is
+  something an attacker can influence; not yet measured systematically.
+
+**Uploads (Phase A, part 2).** `src/ingest/score.py` turns any pcap into the
+store the agent reads, and the web page accepts uploads up to 2 GB: on Cloud Run
+the browser puts the file straight into a bucket and a Cloud Run Job scores it.
+Each capture gets its own false-positive baseline for the noise check,
+estimated without labels. Its first validation failed against the wrong
+reference (attack hosts' normal-labelled traffic); against innocent hosts it
+then passed a rule set beforehand on two fresh captures (true rate 0%, upper
+bound 0.007%). UNSW cannot test the hard case, an innocent host the detector
+keeps flagging. Details: [docs/upload.md](docs/upload.md).
+
 ## 7. Repository layout
 
 ```
@@ -354,12 +396,22 @@ src/
 │   ├── diagnose_retrieval.py  per-class retrieval miss analysis
 │   ├── run_eval.py        harness for the old similarity-retrieval architecture
 │   └── run_eval_hybrid.py harness for the current hybrid pipeline
-└── pcap/
-    ├── extract.py         streaming pcap -> flows with payload-derived text
-    └── label.py           ground-truth join by 5-tuple + time window
+├── pcap/
+│   ├── extract.py         streaming pcap -> flows with payload-derived text
+│   └── label.py           ground-truth join by 5-tuple + time window
+└── ingest/                Phase A: score any pcap (§6a, docs/parity.md)
+    ├── zeek/unsw_features.zeek  per-connection TTL, window, ISN, timing, loss;
+    │                      packets of non-TCP/UDP/ICMP protocols and ARP
+    ├── zeek_run.py        runs Zeek on a pcap, loads JSON logs
+    ├── features.py        Zeek logs -> the detector's 42 features, with provenance
+    ├── other.py           groups other-protocol packets into flows
+    ├── parity.py          Zeek vs UNSW on the same flows: coverage, agreement, detection
+    ├── score.py           any pcap -> the agent's store (flows.jsonl, meta.json)
+    ├── job.py             scores one upload (thread locally, Cloud Run Job in the cloud)
+    └── baseline.py        false-positive rate estimated from the capture; its validation
 
 .claude/skills/            investigate-event, disambiguate-hypotheses, write-incident-report
-tests/                     61 pytest tests (no API key)
+tests/                     142 pytest tests (no API key; ingest and upload tests on synthetic pcaps need Zeek)
 docs/                      architecture diagram + example triage visuals
 data/scenario/             pre-scored dev investigation day (flows.jsonl, meta.json, truth.json)
 data/scenario_heldout/     held-out day v1, same files
