@@ -32,21 +32,86 @@
     outline: 2px solid var(--accent); outline-offset: 2px; }
   .mono { font-family: var(--mono); font-size: .93em; }
   .hidden { display: none !important; }
-  .upload-row { display: flex; gap: 8px; align-items: center; padding: 0 18px 12px; flex-wrap: wrap; }
-  .upload-row .hint { color: var(--muted); font-size: 12px; }
   .dataset { margin: 0 18px 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px;
-             background: var(--sunken); font-size: 12.5px; color: var(--ink); }
-  .dataset b { font-weight: 600; }
-  .dataset .muted { color: var(--muted); }
-  .dataset button { margin-top: 6px; }
-  .uploads { display: flex; flex-direction: column; gap: 6px; padding: 0 18px 12px; }
-  .uploads:empty { display: none; }
+             background: var(--sunken); font-size: 12.5px; color: var(--muted); }
+  .dataset b { font-weight: 600; color: var(--ink); }
   .md-table { overflow-x: auto; margin: 8px 0 12px; }
   .md-table table { border-collapse: collapse; font-size: 13px; }
   .md-table th, .md-table td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; vertical-align: top; }
   .md-table th { background: var(--sunken); font-weight: 600; }
-  .uploads .up { text-align: left; font-size: 12.5px; }
-  .uploads .muted { color: var(--muted); }
+
+  /* ---------- start screen ---------- */
+  #home { flex: 1; overflow: auto; min-height: 0; }
+  .home { max-width: 1040px; margin: 0 auto; padding: 44px 32px 64px; }
+  .home h1 { margin: 0 0 6px; font-size: 26px; line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; }
+  .home .lede { margin: 0 0 30px; color: var(--muted); max-width: 62ch; }
+  .choices { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 20px; align-items: start; }
+  .choice { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line);
+            border-radius: 10px; padding: 22px 24px 24px; }
+  .choice h2 { margin: 0 0 6px; font-size: 17px; font-weight: 600; }
+  .choice > p { margin: 0 0 16px; color: var(--muted); font-size: 14px; max-width: 60ch; }
+  .facts { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; margin: 0 0 20px; font-size: 14px; }
+  .facts dt { color: var(--muted); } .facts dd { margin: 0; }
+  .choice .go { align-self: flex-start; padding: 8px 16px; }
+
+  .drop { border: 1.5px dashed var(--line); border-radius: 8px; background: var(--sunken);
+          padding: 28px 20px; text-align: center; transition: border-color .15s, background .15s; }
+  .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop .big { display: block; font-weight: 500; margin-bottom: 4px; }
+  .drop .small { display: block; color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .drop .btn { margin-top: 10px; }
+  .drop.busy { opacity: .55; pointer-events: none; }
+
+  /* the pipeline: the steps a capture goes through, each with its own bar and clock */
+  .job { margin-top: 20px; }
+  .job-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-size: 14px; }
+  .job-head b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .job-head span { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  ol.pipeline { list-style: none; margin: 12px 0 0; padding: 0; display: grid;
+                grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; counter-reset: stage; }
+  ol.pipeline li { counter-increment: stage; font-size: 12.5px; line-height: 1.35; color: var(--muted); }
+  ol.pipeline .bar { display: block; position: relative; height: 5px; border-radius: 3px; background: var(--risk-lo);
+                     overflow: hidden; margin-bottom: 8px; }
+  ol.pipeline .bar > span { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent);
+                            transition: width .3s; }
+  ol.pipeline .lbl::before { content: counter(stage) ". "; }
+  ol.pipeline li.done .bar > span { width: 100%; }
+  ol.pipeline li.active { color: var(--ink); font-weight: 500; }
+  ol.pipeline li.active .bar > span { width: var(--p, 0%); }
+  ol.pipeline li.active.indef .bar > span { width: 34%; animation: crawl 1.5s ease-in-out infinite; }
+  ol.pipeline li.failed { color: var(--crit); }
+  ol.pipeline li.failed .bar > span { width: 100%; background: var(--crit); }
+  ol.pipeline .t { display: block; font-family: var(--mono); font-size: 11.5px; font-weight: 400;
+                   color: var(--muted); margin-top: 2px; min-height: 1.35em; }
+  @keyframes crawl { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+  .job-msg { margin: 12px 0 0; font-size: 14px; }
+  .job-msg.bad { color: var(--crit); }
+  .job-actions { margin-top: 12px; display: flex; gap: 8px; }
+
+  .history { margin-top: 36px; }
+  .history-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .history h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .history-head span { color: var(--muted); font-size: 13px; }
+  .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+  .history table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .history th { text-align: left; font-weight: 500; color: var(--muted); font-size: 13px;
+                padding: 10px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .history td { padding: 11px 16px; border-top: 1px solid var(--line); vertical-align: middle; }
+  .history tr:first-child td { border-top: 0; }
+  .history td.num { font-variant-numeric: tabular-nums; }
+  .history td.name { font-weight: 500; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .history td.act { text-align: right; white-space: nowrap; }
+  .history td.act .btn + .btn { margin-left: 6px; }
+  .btn.quiet { border-color: transparent; background: none; color: var(--muted); }
+  .btn.quiet:hover { border-color: var(--line); color: var(--ink); }
+  .btn.danger { color: var(--crit); border-color: var(--crit); }
+  .history .empty td { color: var(--muted); padding: 18px 16px; }
+  .pill { display: inline-block; font-size: 12.5px; padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+          background: var(--sunken); color: var(--muted); }
+  .pill.pill-done { background: var(--ok-soft); color: var(--ok); }
+  .pill.pill-busy { background: var(--accent-soft); color: var(--accent); }
+  .pill.pill-error { background: var(--crit-soft); color: var(--crit); }
+  .home-foot { margin-top: 18px; color: var(--muted); font-size: 13px; max-width: 80ch; }
 
   /* ---------- top bar ---------- */
   .top { display: flex; align-items: center; gap: 16px; padding: 0 20px; height: 56px;
@@ -197,7 +262,18 @@
     .fields { grid-template-columns: 1fr; gap: 2px; } .fields dd { margin-bottom: 8px; }
     .trace > summary, ol.steps, .feedback { padding-left: 16px; padding-right: 16px; }
   }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (max-width: 860px) {
+    .home { padding: 28px 16px 48px; }
+    .choices { grid-template-columns: 1fr; }
+    ol.pipeline { grid-template-columns: 1fr; gap: 10px; }
+    ol.pipeline li { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; }
+    ol.pipeline .bar { grid-column: 1 / -1; margin-bottom: 4px; }
+    .history .hide-sm { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+    ol.pipeline li.active.indef .bar > span { animation: none; width: 100%; opacity: .5; }
+  }
 </style>
 </head>
 <body>
@@ -212,24 +288,68 @@
 <div id="app" class="hidden">
   <header class="top">
     <div class="brand"><span class="mark"></span>Detection Analyst</div>
-    <div class="scenario" id="scenarioLabel">Simulated day of traffic, scored by the trained detector</div>
+    <div class="scenario hidden" id="scenarioLabel"></div>
     <div class="spacer"></div>
     <div class="who"><span id="who"></span><br><span id="left"></span></div>
-    <button class="btn" id="newChat">New chat</button>
+    <button class="btn hidden" id="switchData">Change data</button>
+    <button class="btn hidden" id="newChat">New chat</button>
   </header>
-  <div class="wrap">
+
+  <section id="home" aria-labelledby="homeTitle">
+    <div class="home">
+      <h1 id="homeTitle">Start an investigation</h1>
+      <p class="lede">Choose the traffic the agent should work on. It reads the detector's output through
+        read-only tools, explains its evidence, and files triages for you to approve or reject.</p>
+
+      <div class="choices">
+        <article class="choice" aria-labelledby="demoTitle">
+          <h2 id="demoTitle">Demo day</h2>
+          <p>A simulated day on a small corporate network. Real flows from the UNSW-NB15 test set,
+            scored by the trained detector, placed on planted hosts: a worm, a backdoor, a noisy
+            benign server and more.</p>
+          <dl class="facts" id="demoFacts"></dl>
+          <button class="btn primary go" id="openDemo">Open the demo day</button>
+        </article>
+
+        <article class="choice" aria-labelledby="capTitle">
+          <h2 id="capTitle">Your capture</h2>
+          <p>Upload a packet capture. Zeek builds its flows, the detector scores every one, and
+            the noise baseline is measured on your traffic before you see any alerts.</p>
+          <div class="drop" id="drop">
+            <span class="big">Drop a .pcap or .pcapng file here</span>
+            <button class="btn" id="choose">Choose a file</button>
+            <span class="small" id="dropNote">IPv4 traffic. The packets are deleted once scored; results are kept for 7 days.</span>
+            <input type="file" id="pcap" accept=".pcap,.pcapng,.cap" hidden>
+          </div>
+          <div class="job hidden" id="job" aria-live="polite">
+            <div class="job-head"><b id="jobName"></b><span id="jobSize"></span></div>
+            <ol class="pipeline" id="pipeline"></ol>
+            <p class="job-msg hidden" id="jobMsg"></p>
+            <div class="job-actions hidden" id="jobActions"></div>
+          </div>
+        </article>
+      </div>
+
+      <section class="history" aria-labelledby="histTitle">
+        <div class="history-head"><h2 id="histTitle">Your uploads</h2><span id="histNote"></span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Capture</th><th>Status</th><th class="hide-sm">Flows</th><th class="hide-sm">Flagged</th>
+            <th class="hide-sm">Noise baseline</th><th class="hide-sm">Uploaded</th><th></th></tr></thead>
+          <tbody id="uploadsBody"><tr class="empty"><td colspan="7">Nothing uploaded yet.</td></tr></tbody>
+        </table></div>
+      </section>
+      <p class="home-foot">Uploads are private to your access code. Do not upload captures that contain
+        sensitive traffic: they are not scrubbed.</p>
+    </div>
+  </section>
+
+  <div class="wrap hidden" id="workspace">
     <aside>
       <div class="rail-head">
         <h2>Alerts</h2>
-        <p id="railSub">Hosts the detector flagged today. These are leads, not verdicts.</p>
+        <p id="railSub">Hosts the detector flagged. These are leads, not verdicts.</p>
       </div>
-      <div class="upload-row">
-        <button class="btn" id="uploadBtn">Upload a pcap</button>
-        <span class="hint" id="uploadHint">Your own capture, scored the same way</span>
-        <input type="file" id="pcap" accept=".pcap,.pcapng,.cap" hidden>
-      </div>
-      <div id="myUploads" class="uploads"></div>
-      <div id="dataset" class="dataset hidden"></div>
+      <div id="dataset" class="dataset"></div>
       <div id="events"><div class="rail-note">Loading alerts…</div></div>
       <div class="rail-note">The agent reads this data through six read-only tools. It can recommend actions but cannot block or change anything.</div>
     </aside>
@@ -256,6 +376,7 @@ const STARTERS = [
 let code = sessionStorage.getItem("da_code") || "";
 let sessionId = null, busy = false;
 let dataset = null;   // {dataset, name, n_flows, n_flagged, false_positive_rate, ...} when on an upload
+let inWorkspace = false;
 const UPLOAD_STARTERS = [
   "What are the most serious events in this capture?",
   "Which flagged hosts look like detector noise, and which do not?",
@@ -321,7 +442,7 @@ async function login() {
     sessionStorage.setItem("da_code", code);
     $("who").textContent = r.tester;
     $("login").classList.add("hidden"); $("app").classList.remove("hidden");
-    loadEvents(); loadUploads(true); await newChat();
+    showHome(); loadDemoFacts();
   } catch (e) {
     $("loginErr").textContent = e.status === 401 ? "That code isn't recognized. Check it and try again." : e.message;
     $("loginErr").classList.remove("hidden"); sessionStorage.removeItem("da_code");
@@ -365,27 +486,119 @@ function pct(x) {   // two significant digits below 1%, so 0.0015% does not prin
   return (x < 0.01 ? Number((x * 100).toPrecision(2)).toString() : (x * 100).toFixed(1)) + "%";
 }
 
-function showDataset() {
-  const box = $("dataset");
-  if (!dataset) {
-    box.classList.add("hidden");
-    $("scenarioLabel").textContent = "Simulated day of traffic, scored by the trained detector";
-    $("railSub").textContent = "Hosts the detector flagged today. These are leads, not verdicts.";
-    return;
-  }
-  $("scenarioLabel").textContent = `Uploaded capture: ${dataset.name}`;
-  $("railSub").textContent = "Hosts the detector flagged in your capture. These are leads, not verdicts.";
-  box.innerHTML = `<b>${esc(dataset.name)}</b><br>
-    <span class="muted">${dataset.n_flows} flows, ${dataset.n_flagged} flagged.
-    Noise baseline ${pct(dataset.false_positive_rate)} (${esc(dataset.false_positive_rate_source)}).</span><br>
-    <button class="btn" id="backDemo">Back to the demo day</button>`;
-  box.classList.remove("hidden");
-  $("backDemo").onclick = async () => { if (busy) return; dataset = null; showDataset(); loadEvents(); await newChat(); };
+function fmtBytes(n) {
+  if (!n) return "";
+  return n >= 2 ** 30 ? (n / 2 ** 30).toFixed(2) + " GB" : n >= 2 ** 20 ? (n / 2 ** 20).toFixed(1) + " MB"
+       : Math.max(1, Math.round(n / 1024)) + " KB";
+}
+function fmtClock(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+function fmtWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+/* ---------- views ---------- */
+function showHome() {
+  inWorkspace = false;
+  $("home").classList.remove("hidden"); $("workspace").classList.add("hidden");
+  $("switchData").classList.add("hidden"); $("newChat").classList.add("hidden");
+  $("scenarioLabel").classList.add("hidden"); $("left").textContent = "";
+  loadUploads();
+}
+
+async function enterWorkspace(ds) {
+  dataset = ds;          // null = the demo day
+  inWorkspace = true;
+  $("home").classList.add("hidden"); $("workspace").classList.remove("hidden");
+  $("switchData").classList.remove("hidden"); $("newChat").classList.remove("hidden");
+  const label = $("scenarioLabel");
+  label.textContent = ds ? `Your capture: ${ds.name}` : "Demo day: simulated network, real detector scores";
+  label.classList.remove("hidden");
+  $("railSub").textContent = ds ? "Hosts the detector flagged in your capture. These are leads, not verdicts."
+                                : "Hosts the detector flagged on the demo day. These are leads, not verdicts.";
+  $("dataset").innerHTML = ds
+    ? `<b>${esc(ds.name)}</b><br>${ds.n_flows.toLocaleString()} flows, ${ds.n_flagged.toLocaleString()} flagged.
+       Noise baseline ${pct(ds.false_positive_rate)}, ${esc(ds.false_positive_rate_source)}.`
+    : `<b>Demo day</b><br>Hosts and attacks are planted; every flow's score comes from the trained detector.`;
+  $("events").innerHTML = '<div class="rail-note">Loading alerts…</div>';
+  loadEvents(); await newChat();
+}
+
+async function loadDemoFacts() {
+  try {
+    const s = await api("/api/status");
+    const m = s.scenario || {};
+    const rows = [["Flows", m.n_flows ? m.n_flows.toLocaleString() : "?"],
+                  ["Detector", m.detector || "trained two-stage models"],
+                  ["Noise baseline", "6.9%, the detector's rate on UNSW's test set"]];
+    $("demoFacts").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  } catch (e) { $("demoFacts").innerHTML = ""; }
+}
+
+/* ---------- uploads ---------- */
 const PCAP_MAGIC = ["d4c3b2a1", "a1b2c3d4", "4d3cb2a1", "a1b23c4d", "0a0d0d0a"];
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const UP_STATE = { waiting_upload: "uploading…", queued: "queued", running: "scoring…", error: "failed" };
+// The steps a capture goes through, in order, and how a status record maps onto them.
+const STAGES = ["Upload", "Queue", "Check file", "Build flows and score", "Save results"];
+function stageOf(rec) {
+  if (rec.state === "waiting_upload") return 0;
+  if (rec.state === "queued") return 1;
+  if (rec.state === "running") {
+    const s = (rec.stage || "").toLowerCase();
+    return s.startsWith("saving") ? 4 : s.startsWith("building") ? 3 : 2;
+  }
+  return rec.state === "done" ? 5 : -1;
+}
+const PILL = { waiting_upload: ["Uploading", "pill-busy"], queued: ["Queued", "pill-busy"],
+               running: ["Scoring", "pill-busy"], done: ["Ready", "pill-done"], error: ["Failed", "pill-error"] };
+
+/* the pipeline display for the upload this page is following */
+const job = { id: null, stage: -1, started: [], ended: [], pct: 0, failedAt: -1, timer: null };
+function jobReset(name, size) {
+  Object.assign(job, { stage: 0, started: [Date.now()], ended: [], pct: 0, failedAt: -1 });
+  $("jobName").textContent = name; $("jobSize").textContent = fmtBytes(size);
+  $("jobMsg").classList.add("hidden"); $("jobActions").classList.add("hidden");
+  $("job").classList.remove("hidden");
+  clearInterval(job.timer); job.timer = setInterval(drawJob, 1000); drawJob();
+}
+function jobAdvance(stage) {
+  const now = Date.now();
+  while (job.stage < stage && job.stage < STAGES.length) {
+    job.ended[job.stage] = now; job.stage += 1; job.started[job.stage] = now;
+  }
+  drawJob();
+}
+function drawJob() {
+  $("pipeline").innerHTML = STAGES.map((name, i) => {
+    const cls = i === job.failedAt ? "failed" : i < job.stage ? "done" : i === job.stage ? "active" : "";
+    const indef = i === job.stage && i !== 0 ? " indef" : "";
+    const t = job.started[i] ? fmtClock((job.ended[i] || Date.now()) - job.started[i]) : "";
+    const extra = i === 0 && job.stage === 0 ? ` ${job.pct}%` : "";
+    return `<li class="${cls}${indef}" style="--p:${job.pct}%"><span class="bar"><span></span></span><span class="lbl">${esc(name)}</span><span class="t">${t}${extra}</span></li>`;
+  }).join("");
+}
+function jobFinish(rec) {
+  clearInterval(job.timer);
+  const msg = $("jobMsg"), act = $("jobActions");
+  if (rec.state === "done") {
+    jobAdvance(STAGES.length); job.failedAt = -1; drawJob();
+    const s = rec.summary;
+    msg.className = "job-msg";
+    msg.textContent = `${s.n_flows.toLocaleString()} flows, ${s.n_flagged.toLocaleString()} flagged. Noise baseline ${pct(s.false_positive_rate)}.`;
+    act.innerHTML = `<button class="btn primary" id="openJob">Open this capture</button>`;
+    act.classList.remove("hidden");
+    $("openJob").onclick = () => enterWorkspace({ ...s });
+  } else {
+    job.failedAt = Math.max(job.stage, 0); drawJob();
+    msg.className = "job-msg bad";
+    msg.textContent = rec.message || "Scoring failed.";
+  }
+  msg.classList.remove("hidden");
+}
 
 function putFile(target, f, onProgress) {
   // Locally the file goes through the app; on Cloud Run straight to the bucket
@@ -396,66 +609,103 @@ function putFile(target, f, onProgress) {
     for (const [k, v] of Object.entries(target.headers || {})) xhr.setRequestHeader(k, v);
     if (target.via_app) xhr.setRequestHeader("X-Access-Code", code);
     xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(Math.round(100 * e.loaded / e.total)); };
-    xhr.onload = () => xhr.status < 300 ? resolve() : reject(new Error(`upload refused (${xhr.status})`));
-    xhr.onerror = () => reject(new Error("the upload was interrupted"));
+    xhr.onload = () => xhr.status < 300 ? resolve() : reject(new Error(`The upload was refused (${xhr.status}).`));
+    xhr.onerror = () => reject(new Error("The upload was interrupted. Check your connection and try again."));
     xhr.send(f);
   });
 }
 
-async function waitScored(id, name, t0) {
+async function follow(id) {
+  // Poll one upload until it is scored or fails, moving the pipeline as it goes.
+  job.id = id;
   for (;;) {
+    let r;
+    try { r = await api(`/api/uploads/${id}`); } catch (e) { await sleep(5000); continue; }
+    if (job.id !== id) return null;               // the page started following another upload
+    if (r.state === "done" || r.state === "error") { jobFinish(r); loadUploads(); return r; }
+    jobAdvance(stageOf(r));
     await sleep(3000);
-    const r = await api(`/api/uploads/${id}`);
-    if (r.state === "done" || r.state === "error") return r;
-    const mins = Math.floor((Date.now() - t0) / 60000), secs = Math.floor((Date.now() - t0) / 1000) % 60;
-    $("uploadHint").textContent = `${name}: ${r.stage || r.state} (${mins}:${String(secs).padStart(2, "0")})`;
   }
 }
 
-async function openUpload(rec) {
-  dataset = { ...rec.summary }; showDataset();
-  await loadEvents(); await newChat();
-}
-
-async function loadUploads(setHint = false) {
-  try {
-    const r = await api("/api/uploads");
-    // Only at sign-in: later refreshes must not overwrite an upload's message.
-    if (setHint) $("uploadHint").textContent = `Your own capture, up to ${r.max_upload_mb} MB`;
-    $("myUploads").innerHTML = r.uploads.map(u => u.state === "done"
-      ? `<button class="btn up" data-id="${esc(u.dataset)}">${esc(u.name)} <span class="muted">${u.summary.n_flows} flows</span></button>`
-      : `<span class="up muted">${esc(u.name)}: ${UP_STATE[u.state] || u.state}</span>`).join("");
-    document.querySelectorAll("#myUploads button.up").forEach(b => b.onclick = () => {
-      if (busy) return; openUpload(r.uploads.find(u => u.dataset === b.dataset.id)); });
-  } catch (e) {}
-}
-
 async function uploadPcap(f) {
-  busy = true; $("uploadBtn").disabled = true; $("send").disabled = true;
-  const t0 = Date.now();
+  if (busy) return;
+  busy = true; $("drop").classList.add("busy");
+  jobReset(f.name, f.size);
   try {
     const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
     const hex = Array.from(head).map(b => b.toString(16).padStart(2, "0")).join("");
-    if (!PCAP_MAGIC.includes(hex)) throw new Error("that file is not a pcap or pcapng capture");
+    if (!PCAP_MAGIC.includes(hex)) throw new Error("That file is not a pcap or pcapng capture.");
     const c = await api("/api/uploads", { method: "POST", body: JSON.stringify({ name: f.name, size: f.size }) });
+    job.id = c.dataset; loadUploads();
     try {
-      await putFile(c.upload, f, pct => { $("uploadHint").textContent = `Uploading ${f.name}: ${pct}%`; });
+      await putFile(c.upload, f, p => { job.pct = p; drawJob(); });
     } catch (e) {
       try { await api(`/api/uploads/${c.dataset}/abandon`, { method: "POST" }); } catch (_) {}
       throw e;
     }
     await api(`/api/uploads/${c.dataset}/start`, { method: "POST" });
-    $("uploadHint").textContent = `${f.name}: queued`;
-    const rec = await waitScored(c.dataset, f.name, t0);
-    if (rec.state === "error") throw new Error(rec.message || "scoring failed");
-    $("uploadHint").textContent = `Scored in ${Math.round((Date.now() - t0) / 1000)}s`;
-    busy = false;
-    await openUpload(rec); loadUploads();
+    jobAdvance(1);
+    busy = false; $("drop").classList.remove("busy");
+    await follow(c.dataset);
   } catch (e) {
-    $("uploadHint").textContent = `Upload failed: ${e.message}`;
+    jobFinish({ state: "error", message: e.message });
     loadUploads();
   } finally {
-    busy = false; $("uploadBtn").disabled = false; if (sessionId) $("send").disabled = false;
+    busy = false; $("drop").classList.remove("busy");
+  }
+}
+
+let uploadsPoll = null;
+function confirmRemove(btn, name) {
+  // Two clicks instead of a browser dialog: the first arms the button.
+  if (btn.dataset.armed) return true;
+  btn.dataset.armed = "1"; btn.textContent = "Click again to remove"; btn.classList.add("danger");
+  setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = "Remove"; btn.classList.remove("danger"); } }, 4000);
+  return false;
+}
+async function loadUploads() {
+  clearTimeout(uploadsPoll);
+  let r;
+  try { r = await api("/api/uploads"); } catch (e) { return; }
+  $("dropNote").textContent = `IPv4 traffic, up to ${r.max_upload_mb.toLocaleString()} MB. The packets are deleted once scored; results are kept for 7 days.`;
+  $("histNote").textContent = r.uploads.length ? `${r.uploads.length} of 5 slots used` : "";
+  const body = $("uploadsBody");
+  if (!r.uploads.length) {
+    body.innerHTML = '<tr class="empty"><td colspan="7">Nothing uploaded yet.</td></tr>';
+  } else {
+    body.innerHTML = r.uploads.map(u => {
+      const [label, cls] = PILL[u.state] || [u.state, ""];
+      const s = u.summary || {};
+      const busyNow = ["queued", "running"].includes(u.state);
+      const action = (u.state === "done" ? `<button class="btn" data-open="${esc(u.dataset)}">Open</button>` : "")
+                   + (busyNow && job.id !== u.dataset ? `<button class="btn" data-follow="${esc(u.dataset)}">Show progress</button>` : "")
+                   + (!busyNow && job.id !== u.dataset ? `<button class="btn quiet" data-remove="${esc(u.dataset)}" aria-label="Remove ${esc(u.name)}">Remove</button>` : "");
+      return `<tr>
+        <td class="name" title="${esc(u.name)}">${esc(u.name)}</td>
+        <td><span class="pill ${cls}" title="${esc(u.message || u.stage || "")}">${esc(label)}</span></td>
+        <td class="num hide-sm">${s.n_flows != null ? s.n_flows.toLocaleString() : ""}</td>
+        <td class="num hide-sm">${s.n_flagged != null ? s.n_flagged.toLocaleString() : ""}</td>
+        <td class="num hide-sm">${s.false_positive_rate != null ? pct(s.false_positive_rate) : ""}</td>
+        <td class="hide-sm">${esc(fmtWhen(u.created))}</td>
+        <td class="act">${action}</td></tr>`;
+    }).join("");
+    body.querySelectorAll("[data-open]").forEach(b => b.onclick = () =>
+      enterWorkspace({ ...r.uploads.find(u => u.dataset === b.dataset.open).summary }));
+    body.querySelectorAll("[data-remove]").forEach(b => b.onclick = async () => {
+      const u = r.uploads.find(x => x.dataset === b.dataset.remove);
+      if (!confirmRemove(b, u.name)) return;
+      try { await api(`/api/uploads/${u.dataset}`, { method: "DELETE" }); } catch (e) { b.textContent = e.message; return; }
+      loadUploads();
+    });
+    body.querySelectorAll("[data-follow]").forEach(b => b.onclick = () => {
+      const u = r.uploads.find(x => x.dataset === b.dataset.follow);
+      jobReset(u.name, u.size); job.pct = 100; jobAdvance(stageOf(u)); follow(u.dataset); loadUploads();
+    });
+  }
+  // keep the table current while anything is still in flight
+  if (!inWorkspace && r.uploads.some(u => !["done", "error"].includes(u.state))) {
+    uploadsPoll = setTimeout(loadUploads, 5000);
   }
 }
 
@@ -591,8 +841,14 @@ $("q").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) 
 $("go").onclick = login;
 $("code").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
 $("newChat").onclick = () => { if (!busy) newChat(); };
-$("uploadBtn").onclick = () => { if (!busy) $("pcap").click(); };
+$("switchData").onclick = () => { if (!busy) showHome(); };
+$("openDemo").onclick = () => enterWorkspace(null);
+$("choose").onclick = () => { if (!busy) $("pcap").click(); };
 $("pcap").onchange = () => { const f = $("pcap").files[0]; $("pcap").value = ""; if (f) uploadPcap(f); };
+const drop = $("drop");
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) uploadPcap(f); });
 if (code) login();
 </script>
 </body>

@@ -292,11 +292,44 @@ def test_an_upload_whose_file_never_arrived_expires(tmp_path):
     with c:
         ds = c.post("/api/uploads", headers=A, json={"name": "x.pcap", "size": 100}).json()["dataset"]
         assert c.get(f"/api/uploads/{ds}", headers=A).json()["state"] == "waiting_upload"
-        old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat(timespec="seconds")
+        old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=30)).isoformat(timespec="seconds")
         backend.update_status(ds, created=old)
         r = c.get(f"/api/uploads/{ds}", headers=A).json()
-        assert r["state"] == "error" and "expired" in r["message"]
-        assert [u["state"] for u in c.get("/api/uploads", headers=A).json()["uploads"]] == ["error"]
+        assert r["state"] == "error" and "within a day" in r["message"]
+        # a slow 2 GB upload is still in flight after an hour: not expired
+        recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)).isoformat(timespec="seconds")
+        ds2 = c.post("/api/uploads", headers=A, json={"name": "slow.pcap", "size": 100}).json()["dataset"]
+        backend.update_status(ds2, created=recent)
+        assert c.get(f"/api/uploads/{ds2}", headers=A).json()["state"] == "waiting_upload"
+        states = {u["dataset"]: u["state"] for u in c.get("/api/uploads", headers=A).json()["uploads"]}
+        assert states == {ds: "error", ds2: "waiting_upload"}
+
+
+def test_removing_an_upload_frees_its_slot(tmp_path):
+    c, backend = make_client(tmp_path)
+    with c:
+        ids = [c.post("/api/uploads", headers=A, json={"name": f"x{i}.pcap", "size": 100}).json()["dataset"]
+               for i in range(5)]
+        assert c.post("/api/uploads", headers=A, json={"name": "y.pcap", "size": 100}).status_code == 429
+        assert c.delete(f"/api/uploads/{ids[0]}", headers=B).status_code == 404     # not theirs
+        assert c.delete(f"/api/uploads/{ids[0]}", headers=A).json() == {"ok": True}
+        assert backend.read_status(ids[0]) is None
+        assert c.get(f"/api/uploads/{ids[0]}", headers=A).status_code == 404
+        assert c.post("/api/uploads", headers=A, json={"name": "y.pcap", "size": 100}).status_code == 200
+        backend.update_status(ids[1], state="running")
+        assert c.delete(f"/api/uploads/{ids[1]}", headers=A).status_code == 409    # not mid-scoring
+
+
+def test_gcs_delete_removes_every_object_and_the_cache(tmp_path):
+    from src.agent.uploads import GCSBackend
+    bucket = FakeBucket()
+    gcs = GCSBackend(bucket, None, 10, cache_dir=tmp_path / "cache")
+    for name in ("status.json", "store/flows.jsonl", "store/meta.json"):
+        bucket.blob(f"uploads/up-a/{name}").upload_from_string("x")
+    bucket.blob("uploads/up-b/status.json").upload_from_string("x")
+    (tmp_path / "cache" / "up-a").mkdir(parents=True)
+    gcs.delete("up-a")
+    assert set(bucket.store) == {"uploads/up-b/status.json"} and not (tmp_path / "cache" / "up-a").exists()
 
 
 def test_start_without_a_file_fails_cleanly(stub_scoring, tmp_path):

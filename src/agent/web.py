@@ -458,6 +458,18 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
                   message=rec["message"])
         return _public(rec)
 
+    @app.delete("/api/uploads/{ds_id}")
+    def remove_upload(ds_id: str, x_access_code: str | None = Header(default=None)):
+        """Delete an upload and its results, freeing the slot. Not while it is scoring."""
+        tester = access.tester(x_access_code)
+        rec = _public(owned(ds_id, tester))
+        if rec.get("state") in ("queued", "running"):
+            raise HTTPException(409, "Wait until scoring finishes, then remove it.")
+        uploads.delete(ds_id)
+        _DATASET_EVENTS.pop(str(uploads.local_store(ds_id)), None)
+        log_event("upload_removed", tester=tester, dataset=ds_id, name=rec.get("name"))
+        return {"ok": True}
+
     @app.post("/api/uploads/{ds_id}/start")
     def start_upload(ds_id: str, x_access_code: str | None = Header(default=None)):
         """Step 3: the file is in place; score it."""
@@ -618,17 +630,21 @@ def _public(rec: dict | None) -> dict:
     upload whose file never arrived shown as expired once its upload link has."""
     out = {k: v for k, v in (rec or {}).items() if k not in ("logged",)}
     if out.get("state") == "waiting_upload" and _expired(out.get("created")):
-        out["state"], out["message"] = "error", "The file never arrived; the upload link expired."
+        out["state"], out["message"] = "error", "The file never arrived within a day."
     return out
 
 
+UPLOAD_EXPIRY_HOURS = 24
+
+
 def _expired(created: str | None) -> bool:
-    from src.agent.uploads import SIGNED_URL_MINUTES
     try:
         t = dt.datetime.fromisoformat(created)
     except (TypeError, ValueError):
         return False
-    return dt.datetime.now(dt.timezone.utc) - t > dt.timedelta(minutes=SIGNED_URL_MINUTES + 5)
+    # The signed URL only has to be valid when the transfer starts, and a 2 GB
+    # upload on a slow home connection can run well past it: wait a day.
+    return dt.datetime.now(dt.timezone.utc) - t > dt.timedelta(hours=UPLOAD_EXPIRY_HOURS)
 
 
 _EVENTS_CACHE: dict | None = None

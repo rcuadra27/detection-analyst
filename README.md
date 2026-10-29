@@ -411,7 +411,7 @@ src/
     └── baseline.py        false-positive rate estimated from the capture; its validation
 
 .claude/skills/            investigate-event, disambiguate-hypotheses, write-incident-report
-tests/                     142 pytest tests (no API key; ingest and upload tests on synthetic pcaps need Zeek)
+tests/                     148 pytest tests (no API key; ingest and upload tests on synthetic pcaps need Zeek)
 docs/                      architecture diagram + example triage visuals
 data/scenario/             pre-scored dev investigation day (flows.jsonl, meta.json, truth.json)
 data/scenario_heldout/     held-out day v1, same files

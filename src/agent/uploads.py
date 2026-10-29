@@ -72,6 +72,9 @@ class UploadBackend:
     # --- scoring ---
     def start(self, ds_id: str) -> None: ...
 
+    # --- removal ---
+    def delete(self, ds_id: str) -> None: ...
+
 
 # ------------------------------------------------------------------ local
 
@@ -126,6 +129,9 @@ class LocalBackend(UploadBackend):
 
     def local_store(self, ds_id: str) -> Path:
         return self._dir(ds_id) / "store"
+
+    def delete(self, ds_id: str) -> None:
+        shutil.rmtree(self._dir(ds_id), ignore_errors=True)
 
     def start(self, ds_id: str) -> None:
         from src.ingest.job import process_upload
@@ -222,6 +228,11 @@ class GCSBackend(UploadBackend):
             for f in STORE_FILES:
                 self.bucket.blob(self._key(ds_id, f"store/{f}")).download_to_filename(str(d / f))
         return d
+
+    def delete(self, ds_id: str) -> None:
+        for b in list(self.bucket.list_blobs(prefix=f"uploads/{ds_id}/")):
+            b.delete()
+        shutil.rmtree(self.cache_dir / ds_id, ignore_errors=True)
 
     def start(self, ds_id: str) -> None:
         """Run the scoring job for this upload (Cloud Run Admin API v2)."""
