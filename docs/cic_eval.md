@@ -67,6 +67,56 @@ host).
 If prediction 1 holds, the next step is the TTL ablation: retrain without the
 TTL features and re-run UNSW and CIC.
 
+## Before the Monday run: TTL swap test (UNSW test split, production stage 1, threshold 0.85)
+
+Every row's `sttl` set to one value, nothing else changed (`dttl` and
+`ct_state_ttl` left as they were, so this understates the full TTL effect).
+
+| sttl | normal flows flagged | attacks caught |
+|---|---|---|
+| real values | (normal sttl: 31 ×16,702, 254 ×15,049, 62 ×4,129) | 93.11% |
+| 31 | 0.00% | **0.19%** |
+| 62 | 13.67% | |
+| 64 (Linux) | 10.22% | 90.92% |
+| 128 (Windows) | 10.22% | 90.92% |
+| 254 | 30.08% | 93.17% |
+
+Reading:
+
+- The model has not learned "254 = attack" (41% of normal test flows are 254).
+  It has learned "31 = safe": at 31 it flags nothing, attacks included.
+- 64 and 128 fall in the same bin (no split between them): about 10% of normal
+  traffic flagged. Prediction 1 sharpens to **fail on Monday**.
+- **Evasion:** TTL is chosen by the sender. An attacker whose packets arrive with
+  TTL 31 is caught 0.2% of the time. This is a security flaw, not only a
+  portability one.
+
+## Ablation: retraining without TTL
+
+`python -m src.detect.ablation --variant no_ttl` retrains both stages without
+`sttl`, `dttl` and `ct_state_ttl`, saves them under
+`data/processed/ablation/no_ttl/` (production models untouched), and writes
+`compare.md` (UNSW test split, production vs ablated, including the swap test).
+The ablated models take the same 42 columns, so the CIC days are re-scored from
+the saved features without re-running Zeek:
+
+```
+python -m src.ingest.cic_eval --day Monday --pcap data/raw/cic2017/pcap/Monday-WorkingHours.pcap \
+    --csv-dir "data/raw/cic2017/csv/TrafficLabelling " --out data/processed/cic2017/monday \
+    --models data/processed/ablation/no_ttl
+```
+
+**Adoption rule (frozen before training):** `no_ttl` replaces production only if
+
+1. on the UNSW test split at 0.85, attack recall drops by at most 5 points and the
+   normal false-positive rate rises by at most 2 points, and
+2. on CIC Monday, the innocent-host flag rate falls at least 5× or reaches
+   "usable" (≤ 0.1%).
+
+Removing TTL can expose the next shortcut (ports, byte counts, services specific
+to the lab). The Monday report's breakdown by service and host is where that
+would show.
+
 ## Order
 
 Monday first (false alarms), then Friday, Wednesday, Tuesday, Thursday. One

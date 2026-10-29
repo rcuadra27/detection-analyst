@@ -34,6 +34,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
 
 from src.detect.classifier import (CATEGORICAL, DROP_COLS, TEST_CSV, TRAIN_CSV,
                                    load_split, normalize_class)
@@ -43,7 +44,23 @@ STAGE2_PATH = Path("data/processed/stage2_multiclass.joblib")
 METRICS_PATH = Path("data/processed/two_stage_metrics.json")
 
 
-def _pipeline(class_weight=None, max_iter=300):
+class DropColumns(BaseEstimator, TransformerMixin):
+    """First pipeline step of an ablated model: it accepts the full 42-column
+    frame (so score_pcap and every caller stay unchanged) and drops the
+    ablated columns before the model sees them. A class, not a lambda, so the
+    pipeline pickles."""
+
+    def __init__(self, columns=()):
+        self.columns = columns
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return X.drop(columns=[c for c in self.columns if c in X.columns])
+
+
+def _pipeline(class_weight=None, max_iter=300, drop=()):
     from sklearn.compose import ColumnTransformer
     from sklearn.ensemble import HistGradientBoostingClassifier
     from sklearn.pipeline import Pipeline
@@ -59,7 +76,10 @@ def _pipeline(class_weight=None, max_iter=300):
         early_stopping=True, validation_fraction=0.1, random_state=13,
         class_weight=class_weight,
     )
-    return Pipeline([("pre", pre), ("clf", clf)])
+    steps = [("pre", pre), ("clf", clf)]
+    if drop:
+        steps.insert(0, ("drop", DropColumns(drop)))
+    return Pipeline(steps)
 
 
 def train_two_stage(train_csv=TRAIN_CSV, test_csv=TEST_CSV, threshold=0.5, save=True):

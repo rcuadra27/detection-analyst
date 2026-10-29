@@ -121,3 +121,52 @@ def test_end_to_end_on_the_scan_capture(scored):
     assert res["incidents"]["attackers_shown"] == 1 and res["incidents"]["innocent_shown"] == 0
     C.write_report(res, "Monday", out)
     assert "PortScan" in (out / "report.md").read_text()
+
+
+# ---------------------------------------------------------------- ablation
+
+def _unsw_like(n, seed):
+    """Synthetic UNSW-shaped split: attacks have TTL 254 and larger sbytes."""
+    from src.ingest.features import UNSW_FEATURES
+    rng = np.random.default_rng(seed)
+    atk = rng.random(n) < 0.5
+    df = pd.DataFrame({c: rng.random(n) for c in UNSW_FEATURES})
+    df["proto"], df["service"], df["state"] = "tcp", "-", "FIN"
+    df["sttl"] = np.where(atk, 254, 31)
+    df["dttl"] = np.where(atk, 252, 29)
+    df["ct_state_ttl"] = np.where(atk, 2, 0)
+    df["sbytes"] = np.where(atk, 5000, 500) + rng.normal(0, 400, n)
+    df["attack_cat"] = np.where(atk, np.where(rng.random(n) < 0.5, "DoS", "Exploits"), "Normal")
+    df["label"] = atk.astype(int)
+    df.insert(0, "id", range(n))
+    return df
+
+
+def test_ablated_models_ignore_ttl_and_keep_the_interface(tmp_path):
+    from src.detect import ablation
+    tr, te = tmp_path / "train.csv", tmp_path / "test.csv"
+    _unsw_like(800, 1).to_csv(tr, index=False)
+    _unsw_like(400, 2).to_csv(te, index=False)
+    res = ablation.train_variant("no_ttl", tr, te, out_root=tmp_path / "abl")
+    swap = res["ablated"]["ttl_swap_0.85"]
+    assert len({v["normal_flagged"] for v in swap.values()}) == 1      # TTL has no effect
+    assert len({v["attacks_caught"] for v in swap.values()}) == 1
+    assert res["ablated"]["stage1"]["0.5"]["attack_recall"] > 0.9    # sbytes still separates
+    assert "no_ttl" in (tmp_path / "abl" / "no_ttl" / "compare.md").read_text()
+    s1 = joblib.load(tmp_path / "abl" / "no_ttl" / "stage1_binary.joblib")
+    from src.ingest.features import UNSW_FEATURES
+    assert s1.predict_proba(_unsw_like(5, 3)[UNSW_FEATURES]).shape == (5, 2)   # takes all 42
+
+
+def test_rescore_uses_other_models_and_their_own_baseline(tmp_path):
+    from src.ingest.features import META, UNSW_FEATURES
+    joblib.dump(StubStage1(), tmp_path / "stage1_binary.joblib")
+    joblib.dump(StubStage2(), tmp_path / "stage2_multiclass.joblib")
+    f = _unsw_like(60, 4)[UNSW_FEATURES].assign(
+        uid=[f"u{i}" for i in range(60)], ts=1.0, end_ts=2.0,
+        srcip=["a"] * 30 + ["b"] * 30, sport=1, dstip="c", dsport=80, l4="tcp",
+        attack_prob=0.0, pred_class="normal", alert=False)
+    f2, meta = C.rescore(f, tmp_path)
+    assert f2["alert"].tolist() == (f["sttl"] == 254).tolist()
+    assert set(f2.loc[f2["alert"], "pred_class"]) <= {"reconnaissance"}
+    assert meta["baseline"]["rate"] is not None

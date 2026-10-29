@@ -277,7 +277,7 @@ def _pct(x):
     return "n/a" if x is None else f"{x:.4%}"
 
 
-def write_report(res: dict, day: str, out: Path) -> None:
+def write_report(res: dict, day: str, out: Path, name: str = "report.md") -> None:
     r0, r1, r2 = res["rule0_labels_attached"], res["rule1_false_alarms"], res["rule2_baseline"]
     inc = res["incidents"]
     L = [f"# CIC-IDS2017 {day}: UNSW-trained detector", "",
@@ -325,7 +325,31 @@ def write_report(res: dict, day: str, out: Path) -> None:
           "| host | flows | flagged | share | top ports |", "|---|---|---|---|---|"]
     L += [f"| {h['srcip']} | {h['flows']:,} | {h['flagged']:,} | {h['share']:.2%} | {h['top_ports']} |"
           for h in d["top_hosts"]]
-    (out / "report.md").write_text("\n".join(L) + "\n")
+    (out / name).write_text("\n".join(L) + "\n")
+
+
+# ---------------------------------------------------------------- other models
+
+def rescore(feats: pd.DataFrame, models_dir: Path, threshold: float = 0.85) -> tuple[pd.DataFrame, dict]:
+    """Score the saved features with other models (an ablation), without Zeek.
+
+    Returns the frame with attack_prob, pred_class and alert replaced, and a
+    meta dict holding that model's own per-capture baseline."""
+    import joblib
+
+    from src.ingest.baseline import estimate_baseline
+    from src.ingest.features import UNSW_FEATURES
+    s1 = joblib.load(Path(models_dir) / "stage1_binary.joblib")
+    s2 = joblib.load(Path(models_dir) / "stage2_multiclass.joblib")
+    X = feats[UNSW_FEATURES]
+    p = s1.predict_proba(X)[:, 1]
+    classes = np.array([str(c) for c in s2.named_steps["clf"].classes_])
+    f = feats.assign(attack_prob=p.round(4),
+                     pred_class=classes[s2.predict_proba(X).argmax(axis=1)],
+                     alert=p >= threshold)
+    meta = {"baseline": estimate_baseline(f["srcip"].to_numpy(), f["alert"].to_numpy()),
+            "models": str(models_dir)}
+    return f, meta
 
 
 # ---------------------------------------------------------------- main
@@ -339,6 +363,11 @@ def main() -> None:
     ap.add_argument("--rescore", action="store_true", help="run Zeek and the detector again")
     ap.add_argument("--keep-zeek", action="store_true",
                     help="keep the raw Zeek logs (several GB) after scoring")
+    ap.add_argument("--models", type=Path,
+                    help="re-score the saved features with these models (e.g. "
+                         "data/processed/ablation/no_ttl) instead of production; no Zeek")
+    ap.add_argument("--tag", help="suffix for the report and results files (default: the "
+                                  "models folder name)")
     a = ap.parse_args()
 
     out = a.out
@@ -350,16 +379,22 @@ def main() -> None:
             shutil.rmtree(out / "zeek", ignore_errors=True)
     feats = pd.read_csv(out / "features.csv.gz", low_memory=False)
     meta = json.loads((out / "meta.json").read_text())
+    suffix = ""
+    if a.models:
+        feats, meta = rescore(feats, a.models)
+        suffix = "_" + (a.tag or a.models.name)
+        print(f"[cic] re-scored with {a.models}: {int(feats['alert'].sum()):,} flagged")
     cic = load_labels(day_csvs(a.csv_dir, a.day))
     print(f"[cic] {len(feats):,} Zeek flows, {len(cic):,} CIC rows; matching")
     res = evaluate(feats, meta, cic)
-    (out / "results.json").write_text(json.dumps(res, indent=1, default=str))
-    write_report(res, a.day, out)
+    res["models"] = str(a.models) if a.models else "production"
+    (out / f"results{suffix}.json").write_text(json.dumps(res, indent=1, default=str))
+    write_report(res, a.day + (f" ({suffix[1:]})" if suffix else ""), out, f"report{suffix}.md")
     r0, r1, r2 = res["rule0_labels_attached"], res["rule1_false_alarms"], res["rule2_baseline"]
     print(f"[cic] rule 0 {'PASS' if r0['pass'] else 'FAIL'} ({r0['matched_share']:.1%} matched, "
           f"offset {r0['offset']['offset_hours']:+d} h); rule 1 {r1['band']} "
           f"({_pct(r1['innocent_rate'])}); rule 2 {'PASS' if r2['pass'] else 'FAIL'} "
-          f"-> {out / 'report.md'}")
+          f"-> {out / f'report{suffix}.md'}")
 
 
 if __name__ == "__main__":
