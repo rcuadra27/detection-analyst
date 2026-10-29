@@ -35,7 +35,8 @@ reads as noise; against 0.2% it is 75x.
 
 Two changes:
 
-1. **Each uploaded capture gets its own rate**, estimated without labels:
+1. **Each uploaded capture was to get its own rate** (disabled after failing
+   validation, see below), estimated without labels:
    pooled flag rate over hosts with at least 20 flows, then repeatedly drop
    hosts whose flag count is improbable at that rate (one-sided binomial test,
    p < 0.001) and recompute, until the kept set stops changing. Attack sources
@@ -96,3 +97,46 @@ DA_ALLOW_NO_AUTH=1 uvicorn src.agent.web:app --port 8080          # or upload it
   the other. Not yet measured systematically.
 - The detector was trained on one testbed. On a different network the per-flow
   scores are unvalidated; the baseline adapts the noise check, not the model.
+
+## Baseline validation result: criterion 1 fails, estimate disabled
+
+Run on 17-2-2015 captures 1, 10, 15 and 20, under the rule above.
+
+| capture | true benign rate | estimate | estimate / true | criterion 1 (within 2x) |
+|---|---|---|---|---|
+| 1 | 1.02% | ~0.00% | 0.00 | fail |
+| 10 | 0.27% | ~0.00% | 0.01 | fail |
+| 15 | 0.14% | ~0.00% | 0.01 | fail |
+| 20 | 0.12% | ~0.00% | 0.03 | fail |
+
+**Criterion 1 fails on every capture**: the estimate is 30 to 1,000 times too low.
+On the uploaded capture 15 the agent read its noise check against 0.0015% and
+called the attackers 39,000x the false-positive rate. The conclusion held there
+(58-73% of their traffic was flagged), but against so low a reference almost any
+flagged host would read as more than noise.
+
+**Criterion 2 passed vacuously** (0 misclassified hosts with either rate): on all
+four captures the only hosts that raise an event are the four attackers. No
+benign host reaches 5 flagged flows in a 5-minute window, so the criterion had no
+benign case to get wrong. The rule did not anticipate that.
+
+**Action, as the rule specified:** uploads fall back to the stated default,
+6.9% from UNSW's test split, and `noise_check` says so. That default is itself
+known to be wrong in the other direction: through the Zeek path the benign rate
+was 0.12-1.02%, so 6.9% is 7 to 60 times too lenient. It is labelled as lenient
+in the store's `false_positive_rate_source`, which the agent sees. The estimate
+is still computed and stored (`meta.json`, `baseline.used: false`).
+
+**Likely cause (not yet checked):** the estimator assumes benign false positives
+are spread evenly across hosts. README §6 already found that realistic false
+positives cluster on a few benign hosts. Those hosts look improbable under the
+pooled rate, are trimmed like attackers, the rate is recomputed lower, more are
+trimmed, and the estimate falls toward the rate of hosts that were never
+flagged. The `top_trimmed` lists in `data/processed/baseline_eval.json` show
+which hosts were removed.
+
+**What stays true:** the benign rate varies about 8x between captures of one
+testbed (1.02% vs 0.12%), so a fixed reference is wrong for some captures
+whichever value it takes. A per-capture baseline remains the goal; this
+estimator is not it. Any replacement gets its own rule, set before it is run,
+and validation on captures it was not designed on.

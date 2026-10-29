@@ -41,6 +41,10 @@
   .dataset button { margin-top: 6px; }
   .uploads { display: flex; flex-direction: column; gap: 6px; padding: 0 18px 12px; }
   .uploads:empty { display: none; }
+  .md-table { overflow-x: auto; margin: 8px 0 12px; }
+  .md-table table { border-collapse: collapse; font-size: 13px; }
+  .md-table th, .md-table td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; vertical-align: top; }
+  .md-table th { background: var(--sunken); font-weight: 600; }
   .uploads .up { text-align: left; font-size: 12.5px; }
   .uploads .muted { color: var(--muted); }
 
@@ -270,17 +274,32 @@ async function api(path, opts = {}) {
 
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
-function md(text) {   // small, safe subset: paragraphs, bullets, **bold**, `code`
-  const lines = esc(text).split("\n"); let html = "", inList = false;
+function md(text) {   // small, safe subset: paragraphs, bullets, tables, **bold**, `code`
+  const lines = esc(text).split("\n"); let html = "", inList = false, table = null;
   const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  const cells = (l) => l.replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => inline(c.trim()));
+  const flush = () => {
+    if (!table) return;
+    const [head, ...body] = table;
+    html += `<div class="md-table"><table><thead><tr>${head.map(c => `<th>${c}</th>`).join("")}</tr></thead>`
+          + `<tbody>${body.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    table = null;
+  };
   for (const raw of lines) {
     const line = raw.trim();
+    if (line.startsWith("|") && line.endsWith("|")) {
+      if (inList) { html += "</ul>"; inList = false; }
+      if (/^\|[\s:|-]+\|$/.test(line)) continue;            // the |---|---| separator row
+      (table = table || []).push(cells(line)); continue;
+    }
+    flush();
     const m = line.match(/^([-*]|\d+\.)\s+(.*)/);
     if (m) { if (!inList) { html += "<ul>"; inList = true; } html += `<li>${inline(m[2])}</li>`; continue; }
     if (inList) { html += "</ul>"; inList = false; }
     const body = line.replace(/^#+\s*/, "");
     if (body) html += `<p>${inline(body)}</p>`;
   }
+  flush();
   return html + (inList ? "</ul>" : "");
 }
 
@@ -341,7 +360,10 @@ async function loadEvents() {
 }
 
 /* ---------- uploads ---------- */
-function pct(x) { return x == null ? "?" : (x * 100).toFixed(x < 0.01 ? 2 : 1) + "%"; }
+function pct(x) {   // two significant digits below 1%, so 0.0015% does not print as 0.00%
+  if (x == null) return "?";
+  return (x < 0.01 ? Number((x * 100).toPrecision(2)).toString() : (x * 100).toFixed(1)) + "%";
+}
 
 function showDataset() {
   const box = $("dataset");

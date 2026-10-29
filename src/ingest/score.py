@@ -34,7 +34,15 @@ import pandas as pd
 CALIBRATION_PATH = Path(__file__).parent / "calibration.json"
 MODEL_DIR = Path("data/processed")
 THRESHOLD = 0.85
-FALLBACK_FALSE_POSITIVE_RATE = 0.069    # UNSW test split; used only if no estimate
+FALLBACK_FALSE_POSITIVE_RATE = 0.069    # UNSW test split
+# The per-capture estimate (baseline.py) failed its validation: it came out 30 to
+# 1,000x below the true benign rate on all four labelled captures (docs/upload.md).
+# Under the rule set before that run, uploads use the stated default instead. The
+# estimate is still computed and stored in meta["baseline"] for the redesign.
+USE_CAPTURE_ESTIMATE = False
+FALLBACK_SOURCE = ("UNSW test split; on real captures scored through Zeek the benign rate "
+                   "was 0.1-1.0%, so this reference is lenient (per-capture estimate "
+                   "disabled after failing validation)")
 
 # Columns copied into each flow's evidence, under the names the scenario uses.
 _EVIDENCE = (("proto", "proto"), ("service", "service"), ("state", "state"),
@@ -147,10 +155,12 @@ def score_pcap(pcap: Path, out_dir: Path, calibration: Path = CALIBRATION_PATH,
         "classifier_classes": classes,
         "threshold": threshold,
         "layout": "real traffic from an uploaded pcap, flows built by Zeek",
-        "false_positive_rate": rate if rate is not None else FALLBACK_FALSE_POSITIVE_RATE,
-        "false_positive_rate_source": ("estimated from this capture" if rate is not None
-                                       else "UNSW test split (no estimate possible)"),
-        "baseline": est,
+        "false_positive_rate": (rate if USE_CAPTURE_ESTIMATE and rate is not None
+                                else FALLBACK_FALSE_POSITIVE_RATE),
+        "false_positive_rate_source": ("estimated from this capture"
+                                       if USE_CAPTURE_ESTIMATE and rate is not None
+                                       else FALLBACK_SOURCE),
+        "baseline": {**est, "used": bool(USE_CAPTURE_ESTIMATE and rate is not None)},
         "n_flows": len(flows),
         "n_flagged": int(alerts.sum()) if len(alerts) else 0,
         "pcap_sha256": digest,

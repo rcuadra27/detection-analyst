@@ -4,7 +4,7 @@ Fields are from `get_host_activity` (`outbound.*`, `noise_check.*`, `inbound.*`)
 
 ## Step 0, always first: is this attack traffic or detector noise?
 
-The detector flags a small share of benign flows by chance: `noise_check.detector_false_positive_rate`, about 7% on the simulated days and usually far lower on an uploaded capture, which gets its own estimate (`noise_check.false_positive_rate_source` says which). A busy benign host therefore produces flagged flows by chance, and those flagged flows can form any pattern: many internal hosts, one port, a few minutes. **The pattern of the flagged flows says nothing until you know they are more than noise.**
+The detector flags a small share of benign flows by chance: `noise_check.detector_false_positive_rate`, about 7% on the simulated days; `noise_check.false_positive_rate_source` says where the number comes from and how far to trust it. A busy benign host therefore produces flagged flows by chance, and those flagged flows can form any pattern: many internal hosts, one port, a few minutes. **The pattern of the flagged flows says nothing until you know they are more than noise.**
 
 | `noise_check.times_false_positive_rate` | Meaning | What to do |
 |---|---|---|

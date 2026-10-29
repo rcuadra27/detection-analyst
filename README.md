@@ -352,11 +352,11 @@ Found along the way:
 
 **Uploads (Phase A, part 2).** `src/ingest/score.py` turns any pcap into the
 store the agent reads, and the web page accepts uploads up to 2 GB: on Cloud Run
-the browser puts the file straight into a bucket and a Cloud Run Job scores it. Each capture gets its own
-false-positive baseline for the noise check, estimated without labels, because
-the benign rate on real captures (0.0-0.3%) is far below the 6.9% measured on
-UNSW's test split. Design, limits and the baseline's validation rule:
-[docs/upload.md](docs/upload.md).
+the browser puts the file straight into a bucket and a Cloud Run Job scores it.
+A per-capture false-positive baseline for the noise check was built and failed
+its pre-set validation (estimates 30-1,000x below the true benign rate, which
+itself ranged 0.12-1.02% across four captures), so uploads use the 6.9% default
+for now, labelled as lenient. Details: [docs/upload.md](docs/upload.md).
 
 ## 7. Repository layout
 

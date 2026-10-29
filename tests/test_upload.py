@@ -118,9 +118,12 @@ def test_score_pcap_writes_an_agent_readable_store(scored):
     assert len(scan) == 31 and all(f.attack_prob >= 0.85 for f in scan)
     assert all(f.predicted_class == "reconnaissance" for f in scan)
     m = loaded.meta
-    assert m["mode"] == "pcap" and m["false_positive_rate_source"] == "estimated from this capture"
+    assert m["mode"] == "pcap"
+    # The per-capture estimate failed validation (docs/upload.md): it is still
+    # computed and stored, but the noise check uses the stated default.
     assert m["baseline"]["hosts_trimmed"] == 1 and m["baseline"]["top_trimmed"][0]["host"] == SCANNER
-    assert m["false_positive_rate"] < 0.02                           # benign host: 0 of 40 flagged
+    assert m["baseline"]["used"] is False and m["baseline"]["rate"] < 0.02
+    assert m["false_positive_rate"] == 0.069 and "lenient" in m["false_positive_rate_source"]
 
 
 @needs_zeek
@@ -139,11 +142,11 @@ def test_http_text_is_kept_as_untrusted_evidence(scored):
 
 
 @needs_zeek
-def test_noise_check_on_an_upload_uses_its_own_baseline(scored):
+def test_noise_check_on_an_upload_states_its_reference(scored):
     from src.agent.tools import InvestigationSession
     _, store = scored
     n = InvestigationSession(store).get_host_activity(SCANNER)["noise_check"]
-    assert n["false_positive_rate_source"] == "estimated from this capture"
+    assert "lenient" in n["false_positive_rate_source"]            # the agent is told
     assert n["detector_false_positive_rate"] == store.meta["false_positive_rate"]
     assert n["times_false_positive_rate"] > 3
 
@@ -210,7 +213,7 @@ def test_upload_is_scored_by_a_job_and_served_privately(stub_scoring, tmp_path):
         assert rec["state"] == "done", rec
         s = rec["summary"]
         assert s["n_flows"] == 71 and s["n_flagged"] == 31
-        assert s["false_positive_rate_source"] == "estimated from this capture"
+        assert s["false_positive_rate"] == 0.069 and "lenient" in s["false_positive_rate_source"]
 
         ev = c.get(f"/api/events?dataset={ds}", headers=A).json()
         assert ev["events"][0]["source"] == SCANNER and ev["dataset"]["n_flows"] == 71
@@ -241,7 +244,7 @@ def test_a_chat_on_an_upload_reads_that_capture(stub_scoring, tmp_path):
         assert call["name"] == "get_host_activity" and not call["is_error"]
         result = json.loads(call["result"])
         assert result["outbound"]["suspicious_flows"] == 31
-        assert result["noise_check"]["false_positive_rate_source"] == "estimated from this capture"
+        assert "lenient" in result["noise_check"]["false_positive_rate_source"]
 
 
 def test_oversize_uploads_are_refused_before_and_during_transfer(tmp_path):
