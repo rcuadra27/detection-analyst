@@ -354,9 +354,11 @@ Found along the way:
 store the agent reads, and the web page accepts uploads up to 2 GB: on Cloud Run
 the browser puts the file straight into a bucket and a Cloud Run Job scores it.
 A per-capture false-positive baseline for the noise check was built and failed
-its pre-set validation (estimates 30-1,000x below the true benign rate, which
-itself ranged 0.12-1.02% across four captures), so uploads use the 6.9% default
-for now, labelled as lenient. Details: [docs/upload.md](docs/upload.md).
+its first validation, which turned out to use the wrong reference: every flagged
+"benign" flow came from attack hosts' normal-labelled traffic, while innocent
+hosts were flagged at 0-0.003% (the estimator said ~0.0015%). The estimate stays
+off until it passes a corrected rule on fresh captures; uploads use the 6.9%
+default meanwhile, labelled as very lenient. Details: [docs/upload.md](docs/upload.md).
 
 ## 7. Repository layout
 
@@ -409,7 +411,7 @@ src/
     └── baseline.py        false-positive rate estimated from the capture; its validation
 
 .claude/skills/            investigate-event, disambiguate-hypotheses, write-incident-report
-tests/                     135 pytest tests (no API key; ingest and upload tests on synthetic pcaps need Zeek)
+tests/                     142 pytest tests (no API key; ingest and upload tests on synthetic pcaps need Zeek)
 docs/                      architecture diagram + example triage visuals
 data/scenario/             pre-scored dev investigation day (flows.jsonl, meta.json, truth.json)
 data/scenario_heldout/     held-out day v1, same files

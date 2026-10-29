@@ -63,3 +63,38 @@ def test_host_noise_calls_follow_step_0():
     assert calls.loc["ok", "noise"] == True        # 5% vs 6.9%
     strict = host_noise_calls(df, rate=0.002)
     assert strict.loc["ok", "noise"] == False      # the same 5% is 25x a 0.2% baseline
+
+
+def test_truth_separates_innocent_hosts_from_attackers_normal_flows():
+    """The first validation counted every normal-labelled flow. Attack hosts also
+    send normal-labelled flows, and on the 17-2-2015 captures those carried every
+    flagged 'benign' flow; the noise check needs innocent hosts only."""
+    from src.ingest.baseline import truth_rates
+    m = pd.DataFrame({
+        "srcip":   ["atk"] * 10 + ["ok1"] * 50 + ["ok2"] * 50,
+        "u_label": [1] * 6 + [0] * 4 + [0] * 100,          # atk: 6 attack + 4 normal-labelled
+        "alert":   [True] * 6 + [True, True, False, False] + [False] * 99 + [True]})
+    t = truth_rates(m)
+    assert t["attack_hosts"] == ["atk"]
+    assert t["innocent_flows"] == 100 and t["innocent_flagged"] == 1 and t["innocent_rate"] == 0.01
+    assert t["benign_from_attack_hosts_rate"] == 0.5
+    assert t["benign_labelled_rate"] == pytest.approx(3 / 104, abs=1e-6)   # the old reference
+
+
+@pytest.mark.parametrize("true,upper,a,b", [
+    (0.0, 0.00007, True, True),      # nothing flagged, small upper bound: pass
+    (0.001, 0.0018, True, True),     # within 2x
+    (0.001, 0.0005, False, True),    # upper below truth: too strict
+    (0.001, 0.0030, True, False),    # 3x and beyond the 0.05-point slack: too lenient
+    (0.0, 0.0006, True, False),      # slack is 0.05 points, not more
+])
+def test_rule_v2_edges(true, upper, a, b):
+    from src.ingest.baseline import rule_v2
+    r = rule_v2(true, upper)
+    assert (r["a_not_too_strict"], r["b_not_too_lenient"], r["pass"]) == (a, b, a and b)
+
+
+def test_upper_bound_is_reported_and_conservative():
+    est = estimate_baseline(["a"] * 30000 + ["b"] * 5000, [False] * 35000)
+    assert est["rate"] < est["rate_upper"] < 0.0002           # 0 of 35k: at most ~0.007%
+    assert est["rate_upper"] == est["ci95"][1]

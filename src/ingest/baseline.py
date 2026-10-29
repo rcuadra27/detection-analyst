@@ -81,6 +81,10 @@ def estimate_baseline(sources, alerts, min_flows: int = MIN_FLOWS_PER_HOST,
     return {
         "rate": round(float(p), 6),
         "ci95": [round(float(lo), 6), round(float(hi), 6)],
+        # The highest rate consistent with what the kept hosts showed. Used as the
+        # noise reference: with few or no flags a point estimate is falsely
+        # precise, and erring high only makes the noise check more lenient.
+        "rate_upper": round(float(hi), 6),
         "method": (f"flag rate of hosts consistent with chance: hosts with >= {min_flows} "
                    f"flows, hosts with improbable flag counts (binomial p < {alpha}) "
                    "trimmed iteratively"),
@@ -116,6 +120,47 @@ def host_noise_calls(df: pd.DataFrame, rate: float, min_suspicious: int = 5) -> 
     return h
 
 
+# ---------------------------------------------------------------- truth, rule v2
+
+RULE_V2_ABS_SLACK = 0.0005     # 0.05 percentage points
+
+
+def truth_rates(m: pd.DataFrame) -> dict:
+    """True false-positive rates on a joined capture (Zeek rows + UNSW labels).
+
+    `innocent` is the rate the noise check needs: flows from hosts that sent no
+    attack-labelled flow in the capture, i.e. hosts that are innocent. The first
+    validation used `benign_labelled` (every normal-labelled flow), which mixes in
+    normal-labelled flows sent by attack hosts; on the 17-2-2015 captures those
+    carried every flagged "benign" flow while innocent hosts flagged 0-0.003%.
+    Attack hosts are found from the labels, not from an address range.
+    """
+    attack_hosts = set(m.loc[m["u_label"] == 1, "srcip"])
+    benign = m[m["u_label"] == 0]
+    innocent = benign[~benign["srcip"].isin(attack_hosts)]
+    from_attackers = benign[benign["srcip"].isin(attack_hosts)]
+
+    def rate(df):
+        return round(float(df["alert"].mean()), 6) if len(df) else None
+
+    return {"attack_hosts": sorted(attack_hosts),
+            "innocent_rate": rate(innocent), "innocent_flows": int(len(innocent)),
+            "innocent_flagged": int(innocent["alert"].sum()),
+            "benign_labelled_rate": rate(benign),
+            "benign_from_attack_hosts_rate": rate(from_attackers),
+            "benign_from_attack_hosts_flows": int(len(from_attackers))}
+
+
+def rule_v2(true_innocent: float, upper: float) -> dict:
+    """Decision rule v2 for the per-capture baseline (docs/upload.md):
+    (a) not too strict: the true innocent-host rate is at or below the upper bound
+    (b) not too lenient: the upper bound is at most 2x the true rate, or the true
+        rate plus 0.05 percentage points, whichever is larger"""
+    a = true_innocent <= upper
+    b = upper <= max(2 * true_innocent, true_innocent + RULE_V2_ABS_SLACK)
+    return {"a_not_too_strict": bool(a), "b_not_too_lenient": bool(b), "pass": bool(a and b)}
+
+
 # ---------------------------------------------------------------- validation
 
 def evaluate(capture_dirs: list[Path], unsw_csvs: list[str], calibration: Path,
@@ -142,16 +187,21 @@ def evaluate(capture_dirs: list[Path], unsw_csvs: list[str], calibration: Path,
         est = estimate_baseline(z["srcip"], z["alert"])
 
         m = join(z, unsw)
-        benign = m[m["u_label"] == 0]
-        true_rate = float(benign["alert"].mean()) if len(benign) else float("nan")
+        truth = truth_rates(m)
+        true_rate = truth["benign_labelled_rate"] if truth["benign_labelled_rate"] is not None \
+            else float("nan")
 
         # host truth: majority label of the host's matched flagged flows
         lab = m[m["alert"]].groupby("srcip")["u_label"].mean()
         res = {"capture": str(d), "flows": int(len(z)), "matched": int(len(m)),
                "true_benign_rate": round(true_rate, 6), "estimate": est,
                "ratio_to_true": round(est["rate"] / true_rate, 3) if true_rate > 0 else None,
+               "truth": truth,
+               "rule_v2": (rule_v2(truth["innocent_rate"], est["rate_upper"])
+                           if truth["innocent_rate"] is not None else None),
                "noise_calls": {}}
-        for name, rate in (("fixed_0.069", fixed_rate), ("estimated", est["rate"])):
+        for name, rate in (("fixed_0.069", fixed_rate), ("estimated", est["rate"]),
+                           ("estimated_upper", est["rate_upper"])):
             h = host_noise_calls(z.rename(columns={"srcip": "source"}), rate)
             h["attack"] = h.index.map(lambda s: bool(lab.get(s, 0) >= 0.5))
             res["noise_calls"][name] = {
@@ -178,12 +228,19 @@ def main() -> None:
     res = evaluate(a.eval, a.unsw_csv, a.calibration, a.stage1)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(res, indent=2))
-    print(f"{'capture':<32} {'true':>8} {'estimate':>9} {'ratio':>6}   misclassified hosts (6.9% / estimated)")
+    print("Rule v2 (docs/upload.md): true innocent-host rate vs the estimate's upper bound")
+    print(f"{'capture':<32} {'innocent flagged':>18} {'true':>9} {'upper':>9}  (a) (b)  verdict"
+          f"   misclassified hosts 6.9% / upper")
     for r in res:
-        f, e = r["noise_calls"]["fixed_0.069"], r["noise_calls"]["estimated"]
-        print(f"{r['capture']:<32} {r['true_benign_rate']:>8.4f} {r['estimate']['rate']:>9.4f} "
-              f"{r['ratio_to_true'] or float('nan'):>6.2f}   {f['misclassified']} / {e['misclassified']}"
-              f"  (of {e['event_hosts']} event hosts, {e['attack_hosts']} attack)")
+        t, v = r["truth"], r["rule_v2"]
+        f, e = r["noise_calls"]["fixed_0.069"], r["noise_calls"]["estimated_upper"]
+        ok = lambda x: "ok " if x else "NO "
+        print(f"{r['capture']:<32} {t['innocent_flagged']:>7} / {t['innocent_flows']:<8} "
+              f"{t['innocent_rate']:>8.4%} {r['estimate']['rate_upper']:>8.4%}  "
+              f"{ok(v['a_not_too_strict'])} {ok(v['b_not_too_lenient'])} {'PASS' if v['pass'] else 'FAIL'}"
+              f"   {f['misclassified']} / {e['misclassified']} (of {e['event_hosts']} event hosts)")
+    print("(the first validation's reference, all benign-labelled flows, is kept in the json as "
+          "truth.benign_labelled_rate)")
     print(f"[baseline] details: {a.out}")
 
 
