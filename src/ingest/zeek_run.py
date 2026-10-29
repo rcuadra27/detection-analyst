@@ -61,8 +61,10 @@ def read_log(workdir: str | Path, name: str) -> pd.DataFrame:
     path = Path(workdir) / f"{name}.log"
     if not path.exists():
         return pd.DataFrame()
-    rows = [json.loads(line) for line in path.read_text().splitlines()
-            if line.strip() and not line.startswith("#")]
+    # Line by line: on a 10 GB capture conn.log alone runs to gigabytes, and
+    # reading it whole first would hold the text and the rows at once.
+    with path.open() as fh:
+        rows = [json.loads(line) for line in fh if line.strip() and not line.startswith("#")]
     return pd.DataFrame(rows)
 
 

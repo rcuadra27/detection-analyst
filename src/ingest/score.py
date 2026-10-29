@@ -126,10 +126,24 @@ def score_features(feats: pd.DataFrame, stage1, stage2, threshold: float = THRES
     return flows, p_atk >= threshold, classes
 
 
+def _sha256(path: Path, chunk: int = 1 << 20) -> str:
+    """Hash in 1 MB chunks: reading a multi-GB capture whole would need that much RAM."""
+    h = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        while block := fh.read(chunk):
+            h.update(block)
+    return h.hexdigest()
+
+
 def score_pcap(pcap: Path, out_dir: Path, calibration: Path = CALIBRATION_PATH,
                stage1: Path | None = None, stage2: Path | None = None,
-               threshold: float = THRESHOLD, name: str | None = None):
-    """pcap -> out_dir/flows.jsonl + meta.json. Returns the DetectionStore."""
+               threshold: float = THRESHOLD, name: str | None = None,
+               keep_features: bool = False):
+    """pcap -> out_dir/flows.jsonl + meta.json. Returns the DetectionStore.
+
+    keep_features also writes out_dir/features.csv.gz: the 42 model inputs, the
+    join columns, and each flow's score and predicted class. Evaluations use it
+    (src/ingest/cic_eval.py); uploads do not need it."""
     import joblib
 
     from src.agent.store import DetectionStore
@@ -146,7 +160,13 @@ def score_pcap(pcap: Path, out_dir: Path, calibration: Path = CALIBRATION_PATH,
 
     est = estimate_baseline([f.source for f in flows], alerts) if flows else {"rate": None}
     rate = est.get("rate_upper")         # conservative: see baseline.estimate_baseline
-    digest = hashlib.sha256(Path(pcap).read_bytes()).hexdigest()
+    digest = _sha256(pcap)
+    if keep_features:
+        from src.ingest.features import META, UNSW_FEATURES
+        cols = [c for c in META + UNSW_FEATURES if c in feats.columns]
+        feats[cols].assign(attack_prob=[f.attack_prob for f in flows],
+                           pred_class=[f.predicted_class for f in flows],
+                           alert=alerts).to_csv(out_dir / "features.csv.gz", index=False)
     meta = {
         "scenario": name or Path(pcap).name,
         "mode": "pcap",
