@@ -408,7 +408,7 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
             raise HTTPException(413, f"Captures are limited to {uploads.max_bytes // 2**20} MB.")
         if body.size <= 0:
             raise HTTPException(422, "The file is empty.")
-        active = [r for r in uploads.list_status()
+        active = [r for r in map(_public, uploads.list_status())
                   if r.get("tester") == tester and r.get("state") != "error"]
         if len(active) >= MAX_UPLOADS_PER_TESTER:
             raise HTTPException(429, f"Upload limit reached ({MAX_UPLOADS_PER_TESTER} per tester).")
@@ -442,6 +442,21 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
                     raise HTTPException(413, f"Captures are limited to {uploads.max_bytes // 2**20} MB.")
                 fh.write(chunk)
         return {"ok": True, "bytes": size}
+
+    @app.post("/api/uploads/{ds_id}/abandon")
+    def abandon_upload(ds_id: str, x_access_code: str | None = Header(default=None)):
+        """The page could not send the file: close the record so it does not linger
+        or count against the tester's limit."""
+        tester = access.tester(x_access_code)
+        rec = owned(ds_id, tester)
+        if rec.get("state") != "waiting_upload":
+            raise HTTPException(409, f"This upload is already {rec.get('state')}.")
+        uploads.delete_pcap(ds_id)
+        rec = uploads.update_status(ds_id, state="error",
+                                    message="The file transfer did not complete.")
+        log_event("upload_failed", severity="WARNING", tester=tester, dataset=ds_id,
+                  message=rec["message"])
+        return _public(rec)
 
     @app.post("/api/uploads/{ds_id}/start")
     def start_upload(ds_id: str, x_access_code: str | None = Header(default=None)):
@@ -599,8 +614,21 @@ def _utcnow() -> str:
 
 
 def _public(rec: dict | None) -> dict:
-    """An upload record as the page sees it: no internal bookkeeping fields."""
-    return {k: v for k, v in (rec or {}).items() if k not in ("logged",)}
+    """An upload record as the page sees it: no internal bookkeeping fields, and an
+    upload whose file never arrived shown as expired once its upload link has."""
+    out = {k: v for k, v in (rec or {}).items() if k not in ("logged",)}
+    if out.get("state") == "waiting_upload" and _expired(out.get("created")):
+        out["state"], out["message"] = "error", "The file never arrived; the upload link expired."
+    return out
+
+
+def _expired(created: str | None) -> bool:
+    from src.agent.uploads import SIGNED_URL_MINUTES
+    try:
+        t = dt.datetime.fromisoformat(created)
+    except (TypeError, ValueError):
+        return False
+    return dt.datetime.now(dt.timezone.utc) - t > dt.timedelta(minutes=SIGNED_URL_MINUTES + 5)
 
 
 _EVENTS_CACHE: dict | None = None

@@ -177,10 +177,14 @@ gcloud storage buckets create gs://$BUCKET --location=$REGION --uniform-bucket-l
 echo '{"rule":[{"action":{"type":"Delete"},"condition":{"age":7}}]}' > lifecycle.json
 gcloud storage buckets update gs://$BUCKET --lifecycle-file=lifecycle.json
 
-# Let the page PUT to the bucket, from the app's URL only.
-URL=$(gcloud run services describe detection-analyst --region $REGION --format='value(status.url)')
-printf '[{"origin":["%s"],"method":["PUT"],"responseHeader":["Content-Type","x-goog-content-length-range"],"maxAgeSeconds":3600}]' "$URL" > cors.json
-gcloud storage buckets update gs://$BUCKET --cors-file=cors.json
+# Let the page PUT to the bucket, from the app's URLs only. A Cloud Run service
+# answers on two addresses (status.url and <service>-<project number>.<region>.run.app);
+# the browser treats them as different origins, so allow both.
+URL1=$(gcloud run services describe detection-analyst --region $REGION --format='value(status.url)')
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT --format='value(projectNumber)')
+URL2=https://detection-analyst-$PROJECT_NUMBER.$REGION.run.app
+printf '[{"origin":["%s","%s"],"method":["PUT"],"responseHeader":["Content-Type","x-goog-content-length-range"],"maxAgeSeconds":3600}]' "$URL1" "$URL2" > cors.json
+gcloud storage buckets update gs://$BUCKET --cors-file=cors.json && rm cors.json
 
 # The app's service account: use the bucket, and sign URLs as itself
 # (Cloud Run credentials hold no private key, so signing goes through IAM).
@@ -208,7 +212,11 @@ gcloud run services update detection-analyst --region $REGION --update-env-vars 
 ```
 
 Each new deploy of the service builds a new image: run the `gcloud run jobs
-deploy` line again afterwards so the job scores with the same code. A failed
+deploy` line again afterwards so the job scores with the same code.
+
+If an upload fails at once with "the upload was interrupted", the browser blocked
+the transfer: check the address in the browser bar is one of the CORS origins
+(`gcloud storage buckets describe gs://$BUCKET --format="default(cors_config)"`). A failed
 upload shows its reason in the page; the job's full log is under Cloud Run ->
 Jobs -> da-score -> Executions.
 

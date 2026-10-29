@@ -385,6 +385,7 @@ function showDataset() {
 
 const PCAP_MAGIC = ["d4c3b2a1", "a1b2c3d4", "4d3cb2a1", "a1b23c4d", "0a0d0d0a"];
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const UP_STATE = { waiting_upload: "uploading…", queued: "queued", running: "scoring…", error: "failed" };
 
 function putFile(target, f, onProgress) {
   // Locally the file goes through the app; on Cloud Run straight to the bucket
@@ -423,7 +424,7 @@ async function loadUploads(setHint = false) {
     if (setHint) $("uploadHint").textContent = `Your own capture, up to ${r.max_upload_mb} MB`;
     $("myUploads").innerHTML = r.uploads.map(u => u.state === "done"
       ? `<button class="btn up" data-id="${esc(u.dataset)}">${esc(u.name)} <span class="muted">${u.summary.n_flows} flows</span></button>`
-      : `<span class="up muted">${esc(u.name)}: ${u.state === "error" ? "failed" : "scoring…"}</span>`).join("");
+      : `<span class="up muted">${esc(u.name)}: ${UP_STATE[u.state] || u.state}</span>`).join("");
     document.querySelectorAll("#myUploads button.up").forEach(b => b.onclick = () => {
       if (busy) return; openUpload(r.uploads.find(u => u.dataset === b.dataset.id)); });
   } catch (e) {}
@@ -437,7 +438,12 @@ async function uploadPcap(f) {
     const hex = Array.from(head).map(b => b.toString(16).padStart(2, "0")).join("");
     if (!PCAP_MAGIC.includes(hex)) throw new Error("that file is not a pcap or pcapng capture");
     const c = await api("/api/uploads", { method: "POST", body: JSON.stringify({ name: f.name, size: f.size }) });
-    await putFile(c.upload, f, pct => { $("uploadHint").textContent = `Uploading ${f.name}: ${pct}%`; });
+    try {
+      await putFile(c.upload, f, pct => { $("uploadHint").textContent = `Uploading ${f.name}: ${pct}%`; });
+    } catch (e) {
+      try { await api(`/api/uploads/${c.dataset}/abandon`, { method: "POST" }); } catch (_) {}
+      throw e;
+    }
     await api(`/api/uploads/${c.dataset}/start`, { method: "POST" });
     $("uploadHint").textContent = `${f.name}: queued`;
     const rec = await waitScored(c.dataset, f.name, t0);

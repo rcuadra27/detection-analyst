@@ -271,6 +271,34 @@ def test_a_non_pcap_is_rejected_by_the_job(stub_scoring, tmp_path):
         assert backend.pcap_size(ds) is None              # deleted even on failure
 
 
+def test_a_failed_transfer_is_closed_and_frees_the_slot(tmp_path):
+    c, _ = make_client(tmp_path)
+    with c:
+        ids = [c.post("/api/uploads", headers=A, json={"name": f"x{i}.pcap", "size": 100}).json()["dataset"]
+               for i in range(5)]
+        assert c.post("/api/uploads", headers=A, json={"name": "y.pcap", "size": 100}).status_code == 429
+        r = c.post(f"/api/uploads/{ids[0]}/abandon", headers=A)
+        assert r.json()["state"] == "error" and "did not complete" in r.json()["message"]
+        assert c.post(f"/api/uploads/{ids[0]}/abandon", headers=A).status_code == 409
+        assert c.post(f"/api/uploads/{ids[1]}/abandon", headers=B).status_code == 404
+        assert c.post("/api/uploads", headers=A, json={"name": "y.pcap", "size": 100}).status_code == 200
+
+
+def test_an_upload_whose_file_never_arrived_expires(tmp_path):
+    import datetime as dt
+
+    from src.agent import web
+    c, backend = make_client(tmp_path)
+    with c:
+        ds = c.post("/api/uploads", headers=A, json={"name": "x.pcap", "size": 100}).json()["dataset"]
+        assert c.get(f"/api/uploads/{ds}", headers=A).json()["state"] == "waiting_upload"
+        old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat(timespec="seconds")
+        backend.update_status(ds, created=old)
+        r = c.get(f"/api/uploads/{ds}", headers=A).json()
+        assert r["state"] == "error" and "expired" in r["message"]
+        assert [u["state"] for u in c.get("/api/uploads", headers=A).json()["uploads"]] == ["error"]
+
+
 def test_start_without_a_file_fails_cleanly(stub_scoring, tmp_path):
     c, _ = make_client(tmp_path)
     with c:
