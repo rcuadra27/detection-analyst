@@ -84,3 +84,23 @@ def test_behavior_eval_counts_true_and_false_events():
                                                     "b1": "usable"}
     (scan,) = res["per_attack"]
     assert scan["label"] == "PortScan" and scan["coverage"] == 1.0 and scan["b2"] == "pass"
+
+
+def test_v2_long_flood_does_not_become_its_own_normal():
+    """Friday's DDoS ran ~4,900 a minute for 21 minutes; v1 stopped after 15
+    because the rolling median took the flood in."""
+    rows = background(minutes=45)
+    for m in range(10, 31):
+        rows += [[T0 + m * 60 + i * 0.012, "172.16.0.1", "93.184.216.34", 80, "tcp", "RST", 3, 2]
+                 for i in range(4900)]
+    det = B.run_all(_flows(rows))
+    (ev,) = det.events.to_dict("records")
+    assert ev["evidence"]["minutes"] >= 21 and ev["evidence"]["normal_per_minute"] == 0.0
+
+
+def test_v2_browsing_closed_with_resets_is_not_a_sweep():
+    """A page load reaching 60 servers in a minute; the sessions exchange data and
+    close with a reset. v1 counted the resets as probes."""
+    rows = background() + [[T0 + 700 + i * 0.5, "10.0.0.5", f"151.101.{i}.1", 443, "tcp", "RST", 12, 9]
+                           for i in range(60)]
+    assert B.run_all(_flows(rows)).events.empty

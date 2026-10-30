@@ -402,7 +402,8 @@ def behavior_eval(f: pd.DataFrame, det) -> dict:
 
 
 def write_behavior_report(res: dict, day: str, out: Path) -> None:
-    L = [f"# CIC-IDS2017 {day}: behavioral detectors", "",
+    from src.detect.behavior import VERSION as _V
+    L = [f"# CIC-IDS2017 {day}: behavioral detectors {_V}", "",
          "Rules frozen in docs/behavior.md before any attack day was run.", "",
          "## B1: false events (events with no attack-labelled flow)", "",
          "| Detector | events | true | false | B1 |", "|---|---|---|---|---|"]
@@ -424,7 +425,8 @@ def write_behavior_report(res: dict, day: str, out: Path) -> None:
                  f"{(e['end'] - e['start']) / 60:.1f} | {e['flows']:,} | {lab} | {e['evidence']} |")
     if len(res["events"]) > 40:
         L.append(f"| ... {len(res['events']) - 40} more in results_behavior.json | | | | | | |")
-    (out / "report_behavior.md").write_text("\n".join(L) + "\n")
+    from src.detect.behavior import VERSION
+    (out / f"report_behavior_{VERSION}.md").write_text("\n".join(L) + "\n")
 
 
 # ---------------------------------------------------------------- main
@@ -466,13 +468,15 @@ def main() -> None:
         f, rule0, _ = attach_labels(feats, cic)
         det = run_all(f)
         res = {"rule0_labels_attached": rule0, **behavior_eval(f, det)}
-        (out / "results_behavior.json").write_text(json.dumps(res, indent=1, default=str))
+        from src.detect.behavior import VERSION
+        (out / f"results_behavior_{VERSION}.json").write_text(json.dumps(res, indent=1, default=str))
         write_behavior_report(res, a.day, out)
         summary = "; ".join(f"{k} {v['true_events']} true / {v['false_events']} false"
                             for k, v in res["per_detector"].items())
         cover = "; ".join(f"{x['label']} {x['coverage']:.1%}" for x in res["per_attack"])
         print(f"[behavior] rule 0 {'PASS' if rule0['pass'] else 'FAIL'}; {summary}"
-              + (f"; coverage: {cover}" if cover else "") + f" -> {out / 'report_behavior.md'}")
+              + (f"; coverage: {cover}" if cover else "")
+              + f" -> {out / f'report_behavior_{VERSION}.md'}")
         return
     suffix = ""
     if a.models or a.threshold is not None:

@@ -23,8 +23,15 @@ Detectors (thresholds frozen in docs/behavior.md before any attack day was run):
                    least 1,000 connections and at least 10x the service's own
                    median over the previous 30 minutes
 
-A probe is a connection that never carried an exchange: no reply, refused or
-reset (REQ, RST, INT), or at most two packets each way.
+A probe is a connection that never carried an exchange: no reply (REQ, INT),
+or at most two packets each way (a refused SYN is one each way). A reset
+connection that exchanged more than that is a normal close, not a probe.
+
+Version 2 (docs/behavior.md): v1 counted every reset as a probe, so browsers
+closing HTTPS sessions with a reset looked like a sweep; and v1's flood baseline
+took in the flood itself, so a 21-minute DDoS stopped firing after 15 minutes.
+v2 counts resets only when tiny, and freezes a service's baseline while it is
+in alarm.
 
 Each detector returns events (one per run of consecutive firing windows) and the
 flows that belong to them, so evaluations can check events against labels and
@@ -38,8 +45,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+VERSION = "v2"
 WINDOW_S = 60.0
-FAILED_STATES = ("REQ", "RST", "INT")
+NO_REPLY_STATES = ("REQ", "INT")
 PROBE_MAX_PKTS = 2
 
 SCAN_MIN_PORTS = 100
@@ -70,7 +78,7 @@ def _empty() -> Detections:
 def is_probe(f: pd.DataFrame) -> pd.Series:
     small = (pd.to_numeric(f["spkts"], errors="coerce").fillna(0) <= PROBE_MAX_PKTS) & \
             (pd.to_numeric(f["dpkts"], errors="coerce").fillna(0) <= PROBE_MAX_PKTS)
-    return f["state"].isin(FAILED_STATES) | small
+    return f["state"].isin(NO_REPLY_STATES) | small
 
 
 def _window(ts: pd.Series) -> pd.Series:
@@ -134,6 +142,24 @@ def scan_horizontal(f: pd.DataFrame) -> Detections:
                       "probe_share": round(float(r["probe"].mean()), 3), "minutes": int(len(w))})
 
 
+def _flood_windows(s: pd.Series) -> tuple[list, list, list]:
+    """Walk a service's per-minute counts. The baseline is the median of the last
+    FLOOD_HISTORY_WINDOWS minutes that were *not* in alarm, so a long flood does
+    not become its own normal (v1 let it in, and stopped firing mid-attack)."""
+    from collections import deque
+    history: deque = deque(maxlen=FLOOD_HISTORY_WINDOWS)
+    out_w, out_n, out_b = [], [], []
+    for i, (w, n) in enumerate(s.items()):
+        base = float(np.median(history)) if history else 0.0
+        if i >= FLOOD_MIN_HISTORY and n >= FLOOD_MIN_CONNS and n >= FLOOD_MULTIPLE * max(base, 1.0):
+            out_w.append(w)
+            out_n.append(int(n))
+            out_b.append(base)
+        else:
+            history.append(n)
+    return out_w, out_n, out_b
+
+
 def flood(f: pd.DataFrame) -> Detections:
     f = f.assign(w=_window(f["ts"]))
     counts = f.groupby(["dstip", "dsport", "l4", "w"]).size().rename("n").reset_index()
@@ -145,14 +171,10 @@ def flood(f: pd.DataFrame) -> Detections:
     frames = []
     for key, g in counts.groupby(["dstip", "dsport", "l4"]):
         s = g.set_index("w")["n"].reindex(range(w0, w1 + 1), fill_value=0)
-        past = s.shift(1).rolling(FLOOD_HISTORY_WINDOWS, min_periods=1).median().fillna(0)
-        elapsed = pd.Series(np.arange(len(s)), index=s.index)
-        fire = (s >= FLOOD_MIN_CONNS) & (s >= FLOOD_MULTIPLE * past.clip(lower=1)) & \
-               (elapsed >= FLOOD_MIN_HISTORY)
-        if fire.any():
+        fired_w, fired_n, fired_base = _flood_windows(s)
+        if fired_w:
             frames.append(pd.DataFrame({"dstip": key[0], "dsport": key[1], "l4": key[2],
-                                        "w": s.index[fire], "n": s[fire].values,
-                                        "past_median": past[fire].values}))
+                                        "w": fired_w, "n": fired_n, "past_median": fired_base}))
     if not frames:
         return _empty()
     fired = pd.concat(frames, ignore_index=True)

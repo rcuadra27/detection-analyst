@@ -62,13 +62,75 @@ covers slow attacks.
 Uses the features already saved by the CIC runs; no Zeek, seconds per day.
 
 ```
-for day in Monday Friday; do
+for day in Monday Tuesday Wednesday Thursday Friday; do
   python -m src.ingest.cic_eval --day $day --pcap none \
       --csv-dir "data/raw/cic2017/csv/TrafficLabelling " \
       --out data/processed/cic2017/$(echo $day | tr A-Z a-z) --behavior
 done
 ```
 
-## Results
+## Results, v1
 
-(none yet)
+| | Monday | Friday | Verdict |
+|---|---|---|---|
+| `scan_vertical` false events | 0 | 1 | B1 usable |
+| `scan_horizontal` false events | 3 | 2 | **B1 fail** |
+| `flood` false events | 1 | 1 | B1 usable |
+| PortScan coverage | | **99.8%** (3 events, 998-999 ports a minute, probe share 0.995-1.0) | **B2 pass** |
+| DDoS coverage | | 73.2% (1 event, peak 5,085 a minute, 15 minutes) | **B2 fail** |
+| Bot coverage | | 0% | expected: needs beaconing |
+
+For comparison, the per-flow model on the same Friday at 0.85: PortScan 0.8%,
+DDoS 0.1%, with 74% of innocent flows flagged.
+
+Predictions: right on PortScan, the Monday flood count and Bot; wrong on Monday
+scans (3 horizontal events) and DDoS (73%, predicted ≥ 90%).
+
+Causes, checked against the data:
+
+- **Horizontal false events are web browsing.** Office PCs reached 50-59 web
+  servers (443 or 80) in a minute, normal for a page that pulls from CDNs and
+  ad networks. v1 counted every reset (Argus RST, which merges Zeek's REJ with
+  RSTO/RSTR) as a probe, and browsers often close HTTPS sessions with a reset
+  after exchanging data: 53-77% of those sessions counted as probes.
+- **The DDoS gap is the baseline absorbing the attack.** Per minute, the DDoS
+  ran at 1,355, then 4,831-5,085 for 19 minutes, then 1,069: never below the
+  1,000 floor (so the guess of "dips below the floor" was wrong). v1's baseline
+  was the median of the previous 30 minutes, flood included; after 15 flood
+  minutes the median became the flood itself and the 10× condition stopped
+  holding. 15 of 21 minutes covered.
+- The other false events are borderline: `scan_vertical-4` is the victim's
+  backscatter during the scan (394 unanswered ports from 192.168.10.50 back to
+  the scanner); both flood false events are one client (192.168.10.14) sending
+  ~1,100 DNS queries in a minute to the domain controller, labelled benign.
+
+## v2 (frozen before any held-out day is run)
+
+Two changes, each tied to a cause above; thresholds unchanged.
+
+1. **Probe:** no reply (REQ, INT), or at most two packets each way. A reset
+   connection with more traffic is a normal close.
+2. **Flood baseline:** the median of the last 30 minutes **not in alarm**; while
+   a service is in alarm its baseline is frozen.
+
+Monday and Friday shaped v2, so re-running them is a regression check, not a
+test. The tests are days v2 has not seen:
+
+| Day | Judged | Rule |
+|---|---|---|
+| Tuesday (FTP and SSH brute force) | B1 | ≤ 1 false event per detector |
+| Wednesday (DoS Hulk, GoldenEye, slowloris, slowhttptest; Heartbleed) | B1; B2 for **DoS Hulk** and **DoS GoldenEye** | ≥ 90% of their flows in a true flood event |
+| Thursday (web attacks; infiltration) | B1 | ≤ 1 false event per detector |
+
+Predictions for v2:
+
+- Monday and Friday: horizontal false events drop to 0-1; DDoS coverage ≥ 95%.
+- Wednesday: Hulk and GoldenEye pass B2 (both are HTTP floods). Slowloris and
+  slowhttptest are **not** caught: they hold a few hundred slow connections
+  open, far under 1,000 a minute. Recorded as a known blind spot (a detector
+  for many long, nearly idle connections to one server would be its own rule).
+  Heartbleed is a single connection: not caught.
+- Tuesday: brute force not detected (not these detectors' job; a brute-force
+  detector is next); flood may fire on SSH-Patator if it opens ≥ 1,000
+  sessions a minute; if it does, that counts as a true event.
+- Thursday: web attacks not detected (single HTTP sessions); B1 usable.
