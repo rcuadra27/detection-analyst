@@ -104,3 +104,25 @@ def test_v2_browsing_closed_with_resets_is_not_a_sweep():
     rows = background() + [[T0 + 700 + i * 0.5, "10.0.0.5", f"151.101.{i}.1", 443, "tcp", "RST", 12, 9]
                            for i in range(60)]
     assert B.run_all(_flows(rows)).events.empty
+
+
+def test_v3_scattered_unanswered_syns_are_not_a_sweep():
+    """CIC Monday: a Mac sent one-off SYNs that got no answer to 76 web servers in
+    a minute, each in a different network. v2 called it a sweep."""
+    rows = background()
+    for i in range(76):
+        state, sp, dp = ("REQ", 1, 0) if i % 2 == 0 else ("FIN", 12, 9)
+        rows.append([T0 + 700 + i * 0.5, "10.0.0.25", f"{20 + i}.{i}.7.9", 443, "tcp", state, sp, dp])
+    assert B.run_all(_flows(rows)).events.empty
+
+
+def test_v3_internet_wide_scan_still_fires():
+    rows = background() + [[T0 + 700 + i * 0.05, "10.0.0.66", f"{30 + i % 200}.{i // 200}.1.1", 23,
+                            "tcp", "REQ", 1, 0] for i in range(600)]
+    (ev,) = B.run_all(_flows(rows)).events.to_dict("records")
+    assert ev["detector"] == "scan_horizontal" and ev["evidence"]["distinct_targets"] == 600
+
+
+def test_subnet_handles_ipv4_and_ipv6():
+    s = B.subnet(pd.Series(["192.168.10.50", "fe80::223:aeff:fe9b:9567", "2001:db8:1:2:3::9"]))
+    assert s.tolist() == ["192.168.10.0/24", "fe80::/64", "2001:db8:1:2::/64"]

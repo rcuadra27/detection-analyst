@@ -134,3 +134,45 @@ Predictions for v2:
   detector is next); flood may fire on SSH-Patator if it opens ≥ 1,000
   sessions a minute; if it does, that counts as a true event.
 - Thursday: web attacks not detected (single HTTP sessions); B1 usable.
+
+## Results, v2 (regression check on Monday and Friday)
+
+| | Monday | Friday |
+|---|---|---|
+| `scan_vertical` | 0 false | 3 true, 1 false (backscatter) |
+| `scan_horizontal` | **2 false** | 0 false (v1: 2) |
+| `flood` | 1 false (busy DNS client) | 1 true, 1 false (busy DNS client) |
+| PortScan coverage | | 99.8% |
+| DDoS coverage | | **100%** (v1: 73.2%): one event, all 21 minutes |
+
+Both v2 changes did what they were for on Friday. Monday kept two horizontal
+false events (predicted 0-1): HTTPS from 192.168.10.25 (the Mac) to 62 and 76
+web servers in a minute, 54-59% probes. Of that host's probe-like 443 flows in
+its busy minutes, 2,050 of 2,333 were one SYN with no answer and no retry
+(duration 0). The Mac reached 50 or more web servers in **87 different
+minutes** of Monday: the 50-target threshold was wrong, not a first principle.
+One-off unanswered SYNs to many servers cannot be told apart from a slow SYN
+sweep by any probe definition; where the targets are can.
+
+## v3 (frozen before any held-out day is run)
+
+`scan_horizontal` only. Probe share still ≥ 50%, and either
+
+- **≥ 50 targets inside one subnet** (/24 for IPv4, /64 for IPv6): a sweep of a
+  network, the lateral-movement case, or
+- **≥ 500 targets anywhere**: wide scanning by an infected host.
+
+Browsing scatters across unrelated networks; a sweep walks one. Blind spot: a
+sweep spread over many subnets at fewer than 500 targets a minute.
+
+Held-out tests for v3 (none run yet):
+
+| Day | Judged |
+|---|---|
+| Wednesday | B1 for all detectors; B2 for DoS Hulk and DoS GoldenEye (flood) |
+| Thursday | B1 for all detectors. Infiltration: CIC describes the compromised host scanning the internal network afterwards; if those flows carry an attack label, a scan event covering them is reported (not judged: CIC labels only a few dozen rows as Infiltration) |
+| Tuesday | B1 for all detectors |
+
+Predictions for v3: Monday and Friday horizontal false events 0 (regression
+check); Wednesday and Tuesday horizontal false events 0; the other v2
+predictions stand.

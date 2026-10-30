@@ -17,8 +17,9 @@ Detectors (thresholds frozen in docs/behavior.md before any attack day was run):
 
   scan_vertical    one source -> one target, within a 60 s window: at least 100
                    distinct destination ports, at least half of them probes
-  scan_horizontal  one source -> one port, within a 60 s window: at least 50
-                   distinct targets, at least half probes
+  scan_horizontal  one source -> one port, within a 60 s window, at least half
+                   probes, and either at least 50 targets inside one subnet
+                   (/24, or /64 for IPv6) or at least 500 targets anywhere
   flood            one target service (address, port, protocol), per 60 s: at
                    least 1,000 connections and at least 10x the service's own
                    median over the previous 30 minutes
@@ -33,6 +34,12 @@ took in the flood itself, so a 21-minute DDoS stopped firing after 15 minutes.
 v2 counts resets only when tiny, and freezes a service's baseline while it is
 in alarm.
 
+Version 3: v2's horizontal rule counted targets anywhere, and a Mac browsing
+reached 50+ web servers in 87 different minutes of CIC Monday, with one-off
+unanswered SYNs making two of them look like a sweep. A sweep walks a subnet;
+browsing scatters across the internet. v3 counts targets per subnet, with a
+much higher bar for targets spread across networks.
+
 Each detector returns events (one per run of consecutive firing windows) and the
 flows that belong to them, so evaluations can check events against labels and
 the app can show the evidence.
@@ -45,13 +52,14 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-VERSION = "v2"
+VERSION = "v3"
 WINDOW_S = 60.0
 NO_REPLY_STATES = ("REQ", "INT")
 PROBE_MAX_PKTS = 2
 
 SCAN_MIN_PORTS = 100
-SCAN_MIN_TARGETS = 50
+SCAN_MIN_SUBNET_TARGETS = 50     # in one /24 (IPv4) or /64 (IPv6)
+SCAN_MIN_TARGETS_ANYWHERE = 500
 SCAN_MIN_PROBE_SHARE = 0.5
 
 FLOOD_MIN_CONNS = 1000
@@ -128,17 +136,39 @@ def scan_vertical(f: pd.DataFrame) -> Detections:
                       "states": _top(r["state"]), "minutes": int(len(w))})
 
 
+def subnet(ip: pd.Series) -> pd.Series:
+    """/24 for IPv4 (first three octets), /64 for IPv6 (first four groups)."""
+    import ipaddress
+
+    def net(a: str) -> str:
+        try:
+            addr = ipaddress.ip_address(a)
+        except ValueError:
+            return a
+        bits = 24 if addr.version == 4 else 64
+        return str(ipaddress.ip_network(f"{a}/{bits}", strict=False))
+
+    s = ip.astype(str)
+    uniq = {a: net(a) for a in s.unique()}      # few distinct addresses, many flows
+    return s.map(uniq)
+
+
 def scan_horizontal(f: pd.DataFrame) -> Detections:
-    f = f.assign(w=_window(f["ts"]), probe=is_probe(f))
-    g = f.groupby(["srcip", "dsport", "l4", "w"]).agg(targets=("dstip", "nunique"),
-                                                      probes=("probe", "mean"))
-    fired = g[(g["targets"] >= SCAN_MIN_TARGETS) & (g["probes"] >= SCAN_MIN_PROBE_SHARE)].reset_index()
+    f = f.assign(w=_window(f["ts"]), probe=is_probe(f), net=subnet(f["dstip"]))
+    keys = ["srcip", "dsport", "l4", "w"]
+    g = f.groupby(keys).agg(targets=("dstip", "nunique"), probes=("probe", "mean"))
+    g["subnet_targets"] = f.groupby(keys + ["net"])["dstip"].nunique().groupby(level=keys).max()
+    fired = g[(g["probes"] >= SCAN_MIN_PROBE_SHARE)
+              & ((g["subnet_targets"] >= SCAN_MIN_SUBNET_TARGETS)
+                 | (g["targets"] >= SCAN_MIN_TARGETS_ANYWHERE))].reset_index()
     return _collect(
         "scan_horizontal", f, fired, ["srcip", "dsport", "l4"],
         lambda r: str(r["srcip"].iloc[0]),
         lambda r: f"port {int(r['dsport'].iloc[0])}/{r['l4'].iloc[0]}",
         lambda r, w: {"distinct_targets": int(r["dstip"].nunique()),
                       "peak_targets_per_minute": int(w["targets"].max()),
+                      "peak_targets_in_one_subnet": int(w["subnet_targets"].max()),
+                      "busiest_subnet": str(r["net"].value_counts().index[0]),
                       "probe_share": round(float(r["probe"].mean()), 3), "minutes": int(len(w))})
 
 
