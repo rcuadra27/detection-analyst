@@ -229,9 +229,8 @@ def incidents(f: pd.DataFrame, rate: float, attack_hosts: set) -> dict:
             "innocent_shown_hosts": shown.index[~shown["attacker"]].tolist()[:20]}
 
 
-def evaluate(feats: pd.DataFrame, meta: dict, cic: pd.DataFrame) -> dict:
-    from src.ingest.baseline import rule_v2, truth_rates
-
+def attach_labels(feats: pd.DataFrame, cic: pd.DataFrame) -> tuple[pd.DataFrame, dict, pd.Series]:
+    """Zeek flows + CIC rows -> (flows with label/u_label, rule 0 result, CIC row -> uid)."""
     z = zeek_keys(feats)
     off = calibrate_offset(cic, z)
     uid = match(cic, z, off["offset_hours"])
@@ -243,9 +242,17 @@ def evaluate(feats: pd.DataFrame, meta: dict, cic: pd.DataFrame) -> dict:
                           and (off["margin"] is None or off["margin"] >= MIN_OFFSET_MARGIN))}
 
     f = feats.copy()
-    f["alert"] = f["alert"].astype(bool)
+    if "alert" in f.columns:
+        f["alert"] = f["alert"].astype(bool)
     f["label"] = label_flows(f, cic, uid)
     f["u_label"] = (f["label"].notna() & (f["label"] != BENIGN)).astype(int)
+    return f, rule0, uid
+
+
+def evaluate(feats: pd.DataFrame, meta: dict, cic: pd.DataFrame) -> dict:
+    from src.ingest.baseline import rule_v2, truth_rates
+
+    f, rule0, uid = attach_labels(feats, cic)
     truth = truth_rates(f)
     attack_hosts = set(truth["attack_hosts"])
     innocent = f[~f["srcip"].isin(attack_hosts) & (f["u_label"] == 0)]
@@ -352,6 +359,74 @@ def rescore(feats: pd.DataFrame, models_dir: Path, threshold: float = 0.85) -> t
     return f, meta
 
 
+# ---------------------------------------------------------------- behavioral detectors
+
+B1_MAX_FALSE_EVENTS = 1          # per detector per day (docs/behavior.md)
+B2_MIN_COVERAGE = 0.90
+
+
+def behavior_eval(f: pd.DataFrame, det) -> dict:
+    """Behavioral events against CIC labels. `f` comes from attach_labels."""
+    from src.detect.behavior import DETECTORS
+    ev = det.events.copy()
+    mem = det.members.merge(f[["label", "u_label"]], left_on="flow", right_index=True)
+    if len(ev):
+        lab = mem.groupby("event_id").agg(attack_flows=("u_label", "sum"))
+        top = (mem[mem["u_label"] == 1].groupby("event_id")["label"]
+               .agg(lambda s: s.value_counts().index[0]))
+        ev = ev.merge(lab, left_on="event_id", right_index=True, how="left")
+        ev["label"] = ev["event_id"].map(top)
+        ev["true"] = ev["attack_flows"].fillna(0) > 0
+    per_detector = {}
+    for name in DETECTORS:
+        d = ev[ev["detector"] == name] if len(ev) else ev
+        false = int((~d["true"]).sum()) if len(d) else 0
+        per_detector[name] = {"events": int(len(d)), "true_events": int(len(d) - false),
+                              "false_events": false,
+                              "b1": "usable" if false <= B1_MAX_FALSE_EVENTS else "fail"}
+    true_ids = set(ev.loc[ev["true"], "event_id"]) if len(ev) else set()
+    covered = set(mem.loc[mem["event_id"].isin(true_ids), "flow"])
+    attacks = []
+    for lab_, g in f[f["u_label"] == 1].groupby("label"):
+        by = {name: round(float(g.index.isin(set(mem.loc[mem["event_id"].isin(
+                  {e for e in true_ids if e.startswith(name + "-")}), "flow"])).mean()), 4)
+              for name in DETECTORS}
+        cov = float(g.index.isin(covered).mean())
+        attacks.append({"label": lab_, "flows": int(len(g)), "coverage": round(cov, 4),
+                        "detected": bool(cov > 0), "by_detector": by,
+                        "b2": "pass" if cov >= B2_MIN_COVERAGE else "fail"})
+    cols = ["event_id", "detector", "technique", "source", "target", "start", "end", "flows",
+            "true", "label", "evidence"]
+    return {"per_detector": per_detector, "per_attack": attacks,
+            "events": ev[[c for c in cols if c in ev.columns]].to_dict("records") if len(ev) else []}
+
+
+def write_behavior_report(res: dict, day: str, out: Path) -> None:
+    L = [f"# CIC-IDS2017 {day}: behavioral detectors", "",
+         "Rules frozen in docs/behavior.md before any attack day was run.", "",
+         "## B1: false events (events with no attack-labelled flow)", "",
+         "| Detector | events | true | false | B1 |", "|---|---|---|---|---|"]
+    for name, d in res["per_detector"].items():
+        L.append(f"| {name} | {d['events']} | {d['true_events']} | {d['false_events']} | "
+                 f"{d['b1'].upper()} |")
+    if res["per_attack"]:
+        L += ["", "## B2: attack flows inside a true event", "",
+              "| Attack | flows | covered | by detector | B2 |", "|---|---|---|---|---|"]
+        for a in res["per_attack"]:
+            by = ", ".join(f"{k} {v:.0%}" for k, v in a["by_detector"].items() if v)
+            L.append(f"| {a['label']} | {a['flows']:,} | {a['coverage']:.1%} | {by or '-'} | "
+                     f"{a['b2'].upper()} |")
+    L += ["", "## Events", "", "| event | source | target | minutes | flows | label | evidence |",
+          "|---|---|---|---|---|---|---|"]
+    for e in res["events"][:40]:
+        lab = e.get("label") if e.get("true") else "none (false)"
+        L.append(f"| {e['event_id']} | {e['source']} | {e['target']} | "
+                 f"{(e['end'] - e['start']) / 60:.1f} | {e['flows']:,} | {lab} | {e['evidence']} |")
+    if len(res["events"]) > 40:
+        L.append(f"| ... {len(res['events']) - 40} more in results_behavior.json | | | | | | |")
+    (out / "report_behavior.md").write_text("\n".join(L) + "\n")
+
+
 # ---------------------------------------------------------------- main
 
 def main() -> None:
@@ -369,6 +444,9 @@ def main() -> None:
     ap.add_argument("--threshold", type=float,
                     help="stage-1 cutoff for re-scoring (default 0.85); with no --models, "
                          "re-scores with the production models")
+    ap.add_argument("--behavior", action="store_true",
+                    help="run the behavioral detectors (src/detect/behavior.py) instead of "
+                         "the model, on the saved features")
     ap.add_argument("--tag", help="suffix for the report and results files (default: the "
                                   "models folder name)")
     a = ap.parse_args()
@@ -382,6 +460,20 @@ def main() -> None:
             shutil.rmtree(out / "zeek", ignore_errors=True)
     feats = pd.read_csv(out / "features.csv.gz", low_memory=False)
     meta = json.loads((out / "meta.json").read_text())
+    if a.behavior:
+        from src.detect.behavior import run_all
+        cic = load_labels(day_csvs(a.csv_dir, a.day))
+        f, rule0, _ = attach_labels(feats, cic)
+        det = run_all(f)
+        res = {"rule0_labels_attached": rule0, **behavior_eval(f, det)}
+        (out / "results_behavior.json").write_text(json.dumps(res, indent=1, default=str))
+        write_behavior_report(res, a.day, out)
+        summary = "; ".join(f"{k} {v['true_events']} true / {v['false_events']} false"
+                            for k, v in res["per_detector"].items())
+        cover = "; ".join(f"{x['label']} {x['coverage']:.1%}" for x in res["per_attack"])
+        print(f"[behavior] rule 0 {'PASS' if rule0['pass'] else 'FAIL'}; {summary}"
+              + (f"; coverage: {cover}" if cover else "") + f" -> {out / 'report_behavior.md'}")
+        return
     suffix = ""
     if a.models or a.threshold is not None:
         models = a.models or Path("data/processed")

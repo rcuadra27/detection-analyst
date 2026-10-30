@@ -27,10 +27,10 @@ from pathlib import Path
 import pandas as pd
 
 from src.detect.classifier import TEST_CSV, TRAIN_CSV, load_split
-from src.detect.two_stage import STAGE1_PATH, STAGE2_PATH, _pipeline
+from src.detect.two_stage import PRODUCTION_DROP, STAGE1_PATH, STAGE2_PATH, _pipeline
 
 VARIANTS = {
-    "no_ttl": ["sttl", "dttl", "ct_state_ttl"],
+    "no_ttl": list(PRODUCTION_DROP),
 }
 OUT_ROOT = Path("data/processed/ablation")
 THRESHOLDS = (0.5, 0.85)

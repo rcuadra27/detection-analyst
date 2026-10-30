@@ -43,6 +43,12 @@ STAGE1_PATH = Path("data/processed/stage1_binary.joblib")
 STAGE2_PATH = Path("data/processed/stage2_multiclass.joblib")
 METRICS_PATH = Path("data/processed/two_stage_metrics.json")
 
+# Production models are trained without TTL (docs/cic_eval.md, "Decision"): the
+# UNSW models keyed on source TTL, an artifact of the lab's layout that an
+# attacker controls. Dropping it cost ~1 point of recall on UNSW and closed the
+# evasion. --keep-ttl reproduces the original models.
+PRODUCTION_DROP = ["sttl", "dttl", "ct_state_ttl"]
+
 
 class DropColumns(BaseEstimator, TransformerMixin):
     """First pipeline step of an ablated model: it accepts the full 42-column
@@ -82,7 +88,8 @@ def _pipeline(class_weight=None, max_iter=300, drop=()):
     return Pipeline(steps)
 
 
-def train_two_stage(train_csv=TRAIN_CSV, test_csv=TEST_CSV, threshold=0.5, save=True):
+def train_two_stage(train_csv=TRAIN_CSV, test_csv=TEST_CSV, threshold=0.5, save=True,
+                    drop=tuple(PRODUCTION_DROP)):
     import joblib
     from sklearn.metrics import (balanced_accuracy_score, classification_report,
                                  confusion_matrix)
@@ -95,7 +102,7 @@ def train_two_stage(train_csv=TRAIN_CSV, test_csv=TEST_CSV, threshold=0.5, save=
     b_tr = (y_tr != "normal").astype(int)
     b_te = (y_te != "normal").astype(int)
     print("[2stage] fitting stage 1 (binary attack detection) ...")
-    s1 = _pipeline(class_weight=None, max_iter=300)   # NO balancing: protect precision
+    s1 = _pipeline(class_weight=None, max_iter=300, drop=drop)   # NO balancing: protect precision
     s1.fit(X_tr, b_tr)
 
     p_attack = s1.predict_proba(X_te)[:, 1]
@@ -119,7 +126,7 @@ def train_two_stage(train_csv=TRAIN_CSV, test_csv=TEST_CSV, threshold=0.5, save=
     atk_tr = y_tr != "normal"
     print("\n[2stage] fitting stage 2 (attack-type classification) ...")
     # moderate balancing only — 'normal' is gone, so rare classes need less lift
-    s2 = _pipeline(class_weight="balanced", max_iter=300)
+    s2 = _pipeline(class_weight="balanced", max_iter=300, drop=drop)
     s2.fit(X_tr[atk_tr], y_tr[atk_tr])
 
     atk_te = b_te == 1
@@ -192,5 +199,8 @@ if __name__ == "__main__":
                     help="stage-1 attack probability cutoff; raise it to cut false positives")
     ap.add_argument("--train-csv", default=TRAIN_CSV)
     ap.add_argument("--test-csv", default=TEST_CSV)
+    ap.add_argument("--keep-ttl", action="store_true",
+                    help="train on all 42 features, as before the TTL decision")
     args = ap.parse_args()
-    train_two_stage(args.train_csv, args.test_csv, threshold=args.threshold)
+    train_two_stage(args.train_csv, args.test_csv, threshold=args.threshold,
+                    drop=() if args.keep_ttl else tuple(PRODUCTION_DROP))

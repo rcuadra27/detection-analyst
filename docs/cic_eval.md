@@ -194,3 +194,47 @@ python -m src.ingest.cic_eval --day Friday --pcap data/raw/cic2017/pcap/Friday-W
     --csv-dir "data/raw/cic2017/csv/TrafficLabelling " --out data/processed/cic2017/friday \
     --models data/processed/ablation/no_ttl --threshold 0.999
 ```
+
+### Friday (PortScan, DDoS, Bot)
+
+Rule 0 passed (100% of CIC rows matched, offset +3 h).
+
+| | production @ 0.85 | no_ttl @ 0.85 | no_ttl @ 0.999 (frozen) |
+|---|---|---|---|
+| Innocent flows flagged | 74.1% | 21.7% | **0.033%** (39 of 119,591): L1 usable |
+| DDoS flows flagged (84,714) | 0.1% | 0.0% | **0** |
+| PortScan flows flagged (158,864) | 0.8% | 0.0% | **1** |
+| Bot flows flagged (1,228) | 14.0% | 3.0% | 0 |
+| Incidents an analyst would see | | | 0 |
+
+**L2: not viable.** The threshold made Friday quiet by making it blind. The
+predictions were wrong on DDoS (predicted detected) and right on PortScan
+(weak).
+
+At 0.85 every attack is flagged far *less* often than innocent traffic (DDoS
+0.1% vs 74%; PortScan 0.8% vs 74%). On CIC the model ranks attacks below normal
+traffic, so no threshold can separate them.
+
+## Conclusion
+
+1. The pcap → Zeek → features pipeline is faithful (Phase A parity).
+2. The UNSW-trained model keys on source TTL, an artifact of the lab's layout
+   and an evasion route (attacks arriving at TTL 31: 0.2% caught).
+3. Without TTL, UNSW performance is unchanged (−1 point recall) and the evasion
+   is closed.
+4. On a different network (CIC-IDS2017) it flags 15-22% of innocent traffic
+   without TTL and 55-74% with it, and ranks attacks below normal traffic.
+5. A threshold learned on a benign day silences attacks along with the noise.
+
+A per-flow model trained on one lab is not a detector for other networks. It
+stays one signal among several; the behavioral detectors (docs/behavior.md) are
+the next layer, and a retrain on several datasets is a separate track.
+
+## Decision: production models trained without TTL
+
+Adopted as a **security decision**, not as a pass of the ablation adoption rule
+(part 2 failed: 3.6x on Monday, 5x required). Reasons: the TTL-31 evasion is
+closed; on UNSW the change is −1.06 points of recall and −0.08 points of false
+positives; on CIC both models fail and no_ttl fails less. `src.detect.two_stage`
+now trains without `sttl`, `dttl` and `ct_state_ttl` by default (`--keep-ttl`
+reproduces the old models). The 6.9% UNSW fallback rate stays (no_ttl: 6.77%).
