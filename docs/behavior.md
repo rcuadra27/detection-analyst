@@ -351,3 +351,68 @@ Predictions: Thursday B1 usable for all four judged detectors; web attacks
 nothing, since 20 logins a minute over HTTP is not a fixed-port login
 service); infiltration not covered unless the infected host's internal scan
 reaches the scan thresholds.
+
+## Results, v5: Thursday (held out)
+
+| Rule | Result | Verdict |
+|---|---|---|
+| B1 `scan_horizontal`, `flood`, `brute_force` | 0 false events | usable |
+| **B1 `scan_vertical`** | **48 false events** against CIC's labels | **fail** (the official result) |
+| `dns_burst` (informational) | 0 events | |
+| Web Attack - Brute Force (1,364 flows), XSS (631), SQL injection (12) | 0% covered | as predicted |
+| Infiltration (8 flows) | 0% covered | as predicted |
+
+The per-flow model flagged 16.3% of Thursday's innocent flows.
+
+**What the 48 events are.** 47 come from 192.168.10.8, which scanned about
+1,000 ports on each of 11 other office machines (.5, .9, .12, .14, .15, .16,
+.17, .19, .25, .50, .51), several times each, from 14:33 to 15:44 lab time.
+CIC's description of Thursday says 192.168.10.8 (Windows Vista) was
+compromised in the infiltration (exploited at 14:19-14:21 and 14:33-14:35,
+Dropbox step 15:04-15:45) and that its "Second Step (Portscan + Nmap)" had
+"Attacker: Vista, 192.168.10.8; Victim: All other clients"
+(https://www.unb.ca/cic/datasets/ids-2017.html). CIC's CSVs label those flows
+BENIGN and mark only 36 rows as Infiltration. The rule found the compromised
+host mapping the network; the labels call it normal. The 48th event,
+172.16.0.1 → 192.168.10.51 at 14:00, matches no documented step and stays
+unexplained.
+
+| Judged against | False events | B1 |
+|---|---|---|
+| CIC's labels (frozen rule) | 48 | fail |
+| CIC's own attack description | 1 (the 14:00 scan of .51) | would pass |
+
+The reclassification follows the dataset authors' description, not a judgment
+of ours, but it was made after seeing the result, so both lines stand.
+
+**What it shows about the rules.** One campaign produced 47 events: the host
+scanned machines one after another, about 1,000 ports on one host a minute,
+so `scan_horizontal` (many hosts in the same minute) never fired. The missing
+piece is grouping per source across targets ("192.168.10.8 port-scanned 11
+internal hosts, 15:04-15:45"), a single and much stronger signal: a private
+machine mapping the network is the classic sign of compromise. Not built yet.
+
+## Five-day scorecard (CIC-IDS2017, rules v5)
+
+| Attack | Day | Rule | Coverage | Test |
+|---|---|---|---|---|
+| PortScan | Fri | `scan_vertical` | 99.8% | used in design |
+| Internal scan after infiltration | Thu | `scan_vertical` | 47 events from the infected host | held out; labelled benign by CIC |
+| DDoS (LOIC) | Fri | `flood` | 100% | after the v2 fix |
+| DoS Hulk | Wed | `flood` | 99.8% | held out, pass |
+| DoS Slowhttptest | Wed | `flood` | 85.3% | held out, reported |
+| DoS GoldenEye | Wed | `flood` | 65.4% | held out, fail (near the 1,000 floor) |
+| FTP-Patator, SSH-Patator | Tue | `brute_force` | 99.6%, 99.6% | held out, pass |
+| DoS slowloris, Heartbleed | Wed | none | 0% | no rule for them |
+| Bot | Fri | none | 0% | needs beaconing |
+| Web brute force, XSS, SQL injection | Thu | none | 0% | needs HTTP content |
+| Infiltration (initial step) | Thu | none | 0% | single sessions |
+
+False events per detector per day: 0-1 everywhere, except `flood` on Tuesday
+(two DNS bursts; v5 moves those to `dns_burst`) and `scan_vertical` on
+Thursday (above). The per-flow model flagged 15-74% of innocent flows on every
+day.
+
+Open items: scan campaigns grouped per source; a beaconing detector; slow DoS
+(many long idle connections to one server); web attacks need HTTP evidence
+(Zeek's http.log URIs and status codes, or signatures).
