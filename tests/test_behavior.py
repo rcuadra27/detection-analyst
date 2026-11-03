@@ -144,3 +144,26 @@ def test_v4_occasional_logins_and_probes_are_not_brute_force():
     rows += [[T0 + 600 + i * 30.0, "10.0.0.7", "10.0.0.50", 22, "tcp", "FIN", 40, 38] for i in range(20)]
     rows += [[T0 + 900 + i * 0.5, "10.0.0.8", "10.0.0.50", 22, "tcp", "REQ", 1, 0] for i in range(50)]
     assert B.run_all(_flows(rows)).events.empty
+
+
+def test_v5_one_client_dns_burst_is_not_a_flood():
+    """CIC, every day: one office machine sent 1,000-1,900 DNS queries in a minute to the
+    DNS server, which saw about 50-230 a minute otherwise."""
+    burst = [[T0 + 900 + i * 0.04, "10.0.0.9", "10.0.0.2", 53, "udp", "CON", 1, 1] for i in range(1300)]
+    calm = [[T0 + m * 60 + i, f"10.0.0.{30 + i % 20}", "10.0.0.2", 53, "udp", "CON", 1, 1]
+            for m in range(25) for i in range(60)]
+    det = B.run_all(_flows(background(minutes=25) + calm + burst))
+    assert det.events["detector"].tolist() == ["dns_burst"]
+    (rec,) = B.to_records(det)
+    assert rec["source"] == "10.0.0.9" and rec["evidence"]["peak_queries_per_minute"] >= 1000
+    assert rec["technique_ids"] == ["T1071.004"] and rec["summary"].startswith("DNS burst: 10.0.0.9")
+
+
+def test_v5_many_sources_flooding_dns_is_still_a_flood():
+    calm = [[T0 + m * 60 + i, f"10.0.0.{30 + i % 20}", "10.0.0.2", 53, "udp", "CON", 1, 1]
+            for m in range(25) for i in range(60)]
+    attack = [[T0 + 900 + i * 0.02, f"203.0.113.{i % 200}", "10.0.0.2", 53, "udp", "INT", 1, 0]
+              for i in range(3000)]
+    det = B.run_all(_flows(background(minutes=25) + calm + attack))
+    assert "flood" in det.events["detector"].tolist()
+    assert "dns_burst" not in det.events["detector"].tolist()     # no single source reaches 1,000

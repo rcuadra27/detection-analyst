@@ -367,7 +367,7 @@ B2_MIN_COVERAGE = 0.90
 
 def behavior_eval(f: pd.DataFrame, det) -> dict:
     """Behavioral events against CIC labels. `f` comes from attach_labels."""
-    from src.detect.behavior import DETECTORS
+    from src.detect.behavior import DETECTORS, INFORMATIONAL
     ev = det.events.copy()
     mem = det.members.merge(f[["label", "u_label"]], left_on="flow", right_index=True)
     if len(ev):
@@ -383,7 +383,8 @@ def behavior_eval(f: pd.DataFrame, det) -> dict:
         false = int((~d["true"]).sum()) if len(d) else 0
         per_detector[name] = {"events": int(len(d)), "true_events": int(len(d) - false),
                               "false_events": false,
-                              "b1": "usable" if false <= B1_MAX_FALSE_EVENTS else "fail"}
+                              "b1": ("informational" if name in INFORMATIONAL
+                                     else "usable" if false <= B1_MAX_FALSE_EVENTS else "fail")}
     true_ids = set(ev.loc[ev["true"], "event_id"]) if len(ev) else set()
     covered = set(mem.loc[mem["event_id"].isin(true_ids), "flow"])
     attacks = []

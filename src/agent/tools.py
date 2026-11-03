@@ -75,10 +75,9 @@ RULE_NOTES = {
         "Counted, not scored: a service received at least 1,000 connections in a minute and at "
         "least 10 times its own normal rate (the median of its last 30 quiet minutes). Network "
         "or application denial of service (T1498, T1499). Look at the senders: one or a few "
-        "sources at thousands a minute against a server is the attack pattern. A known benign "
-        "look-alike in test data is one internal client sending a burst of DNS queries to the "
-        "DNS server; that is also what DNS tunneling looks like, so report it, at lower "
-        "severity, rather than dismissing it. The noise check does not apply to rule events."),
+        "sources at thousands a minute against a server is the attack pattern. One private "
+        "client's burst against a DNS server is not counted here (see dns_burst). The noise "
+        "check does not apply to rule events."),
     "brute_force": (
         "Counted, not scored: one source opened at least 20 sessions a minute to one login "
         "service (ssh, ftp, telnet, rdp, vnc, pop3, imap) on one target, each one exchanging "
@@ -89,9 +88,19 @@ RULE_NOTES = {
         "unknown source guessing passwords against an internal server is the attack pattern; "
         "the next question is whether any session succeeded (long sessions, data transferred "
         "afterwards). The noise check does not apply to rule events."),
+    "dns_burst": (
+        "Counted, not scored: one source sent at least 1,000 DNS queries in a minute. This is "
+        "reported for visibility, not as an attack: in test data it was always software on an "
+        "office machine (an updater, a sync client, a misconfigured service). It is also the "
+        "shape of DNS tunneling and of malware generating random domain names (Application "
+        "Layer Protocol: DNS, T1071.004). Say which it most likely is from the evidence you have "
+        "(does it repeat, is the host otherwise flagged, does it coincide with other rule "
+        "events), keep severity low unless something else points to compromise, and recommend "
+        "checking the queried names in the DNS server's logs, which this data does not include. "
+        "The noise check does not apply to rule events."),
 }
 RULE_DEFAULT_SEVERITY = {"scan_vertical": "medium", "scan_horizontal": "medium", "flood": "high",
-                         "brute_force": "medium"}
+                         "brute_force": "medium", "dns_burst": "low"}
 
 
 def _is_probe(ev: dict) -> bool | None:

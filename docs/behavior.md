@@ -290,3 +290,64 @@ Rules for v4:
 Predictions: Tuesday FTP-Patator and SSH-Patator both pass B2; 0 `brute_force`
 false events on Monday, Wednesday, Friday and Thursday (the office's SSH and FTP
 use is light: Monday has about 1,000 SSH and 460 FTP flows in the whole day).
+
+## Results, v4
+
+### Held-out: Tuesday (FTP-Patator, SSH-Patator)
+
+| Rule | Result | Verdict |
+|---|---|---|
+| **B2 FTP-Patator** | **99.6%**: one event, 61 minutes, 3,977 sessions, peak 70 a minute, median session 9 s | **pass** |
+| **B2 SSH-Patator** | **99.6%**: two events (58 and 3 minutes, split by a one-minute dip), peak 56 a minute, median session 12 s | **pass** |
+| B1 `brute_force`, `scan_vertical`, `scan_horizontal` | 0 false events | usable |
+| **B1 `flood`** | **2 false events**: 192.168.10.9 (1,227 DNS queries in a minute) and 192.168.10.8 (1,070) to the domain controller | **fail** |
+
+The per-flow model (now without TTL) flagged 16.4% of Tuesday's innocent flows.
+
+### `brute_force` on the other days (held out for this rule)
+
+| Day | `brute_force` | Other detectors |
+|---|---|---|
+| Monday | 0 true, 0 false | identical to v3 |
+| Wednesday | 0 true, 0 false | identical to v3 |
+| Friday | **2 true**, 0 false | identical to v3 |
+
+Predictions held, except that brute force fired twice on Friday, which has no
+brute-force attack. The flows carry an attack label (PortScan), so they count as
+true events, but the likely cause is nmap's service-version probing, which
+connects to open FTP and SSH ports repeatedly and exchanges data: the event then
+names the wrong technique (T1110 instead of T1046). Not confirmed against the
+event list yet. Not changed: fixing it on the day that showed it would be
+tuning on seen data. The agent can tell them apart (same source, same target, a
+port-scan event in the same minutes); a later version could suppress
+brute force when the same source scans the same target in those minutes.
+
+## v5 (frozen before Thursday is run)
+
+The DNS burst has now appeared on every CIC day (Monday, Wednesday, Friday once
+each, Tuesday twice): one office machine sends 1,000-1,900 DNS queries in a
+minute to the domain controller. CIC labels it benign. It is not a denial of
+service, and the flood rule should not own it.
+
+1. **`flood`** drops a DNS (port 53) window when one private client sent at
+   least half of that minute's queries. Floods of a DNS server by many sources,
+   or from a public address, still fire. (Those windows still freeze the
+   service's baseline, as any window over 10× normal does.)
+2. **`dns_burst`** (new, informational): one source sending at least 1,000 DNS
+   queries in a minute. Low severity, technique T1071.004. Reported, not judged
+   as an attack: on CIC it was always benign software, and it is also the shape
+   of DNS tunneling and of malware generating random domains. B1 does not apply
+   to it.
+
+Thresholds of the other detectors are unchanged.
+
+| Day | Judged |
+|---|---|
+| **Thursday** (held out) | B1 for `scan_vertical`, `scan_horizontal`, `flood`, `brute_force`. Reported: `dns_burst` events; coverage of web attacks (brute force, XSS, SQL injection) and infiltration, which no detector is built for |
+| Monday, Tuesday, Wednesday, Friday | Regression check: `flood` false events go to 0 on all four; true events and coverage unchanged; the former DNS floods reappear as `dns_burst` events |
+
+Predictions: Thursday B1 usable for all four judged detectors; web attacks
+0-10% covered (single HTTP sessions; Thursday's web brute force may trip
+nothing, since 20 logins a minute over HTTP is not a fixed-port login
+service); infiltration not covered unless the infected host's internal scan
+reaches the scan thresholds.

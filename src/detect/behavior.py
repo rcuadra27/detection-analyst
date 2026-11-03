@@ -55,7 +55,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-VERSION = "v4"
+VERSION = "v5"
 WINDOW_S = 60.0
 NO_REPLY_STATES = ("REQ", "INT")
 PROBE_MAX_PKTS = 2
@@ -76,8 +76,17 @@ AUTH_PORTS = {21: "ftp", 22: "ssh", 23: "telnet", 3389: "rdp", 5900: "vnc",
               110: "pop3", 143: "imap"}
 BRUTE_MIN_SESSIONS = 20        # per minute, one source -> one target, one login service
 
+# v5: one internal client hammering the DNS server is not a denial of service. It
+# recurred on every CIC day (1,000-1,900 queries in a minute, labelled benign) and
+# is reported by dns_burst instead, at low severity: it is also what DNS tunneling
+# and domain-generating malware look like.
+DNS_PORT = 53
+DNS_BURST_MIN_QUERIES = 1000   # per minute, one source
+DNS_SINGLE_CLIENT_SHARE = 0.5  # flood windows on port 53 where one private client sent this much
+INFORMATIONAL = {"dns_burst"}  # reported, not judged as attacks (docs/behavior.md, v5)
+
 TECHNIQUES = {"scan_vertical": "T1046", "scan_horizontal": "T1046",
-              "flood": "T1498/T1499", "brute_force": "T1110"}
+              "flood": "T1498/T1499", "brute_force": "T1110", "dns_burst": "T1071.004"}
 
 
 @dataclass
@@ -201,6 +210,31 @@ def _flood_windows(s: pd.Series) -> tuple[list, list, list]:
     return out_w, out_n, out_b
 
 
+def _private(ip: str) -> bool:
+    import ipaddress
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
+def _drop_single_dns_client(fired: pd.DataFrame, f: pd.DataFrame) -> pd.DataFrame:
+    """v5: remove DNS flood windows that are one private client's burst (dns_burst
+    reports those). Floods of a DNS server by many sources, or from outside, stay."""
+    dns = fired[fired["dsport"] == DNS_PORT]
+    if dns.empty:
+        return fired
+    sub = f[(f["dsport"] == DNS_PORT) & f["w"].isin(dns["w"]) & f["dstip"].isin(dns["dstip"])]
+    per = sub.groupby(["dstip", "l4", "w", "srcip"]).size().rename("k").reset_index()
+    top = per.sort_values("k").groupby(["dstip", "l4", "w"]).tail(1)
+    tot = per.groupby(["dstip", "l4", "w"])["k"].sum().rename("total").reset_index()
+    top = top.merge(tot, on=["dstip", "l4", "w"])
+    one = top[(top["k"] >= DNS_SINGLE_CLIENT_SHARE * top["total"]) & top["srcip"].map(_private)]
+    key = fired[["dstip", "dsport", "l4", "w"]].merge(
+        one[["dstip", "l4", "w"]].assign(_x=1), on=["dstip", "l4", "w"], how="left")
+    return fired[~((fired["dsport"] == DNS_PORT).values & key["_x"].notna().values)].reset_index(drop=True)
+
+
 def flood(f: pd.DataFrame) -> Detections:
     f = f.assign(w=_window(f["ts"]))
     counts = f.groupby(["dstip", "dsport", "l4", "w"]).size().rename("n").reset_index()
@@ -218,7 +252,9 @@ def flood(f: pd.DataFrame) -> Detections:
                                         "w": fired_w, "n": fired_n, "past_median": fired_base}))
     if not frames:
         return _empty()
-    fired = pd.concat(frames, ignore_index=True)
+    fired = _drop_single_dns_client(pd.concat(frames, ignore_index=True), f)
+    if fired.empty:
+        return _empty()
     return _collect(
         "flood", f, fired, ["dstip", "dsport", "l4"],
         lambda r: ", ".join(_top(r["srcip"]).keys()),
@@ -254,8 +290,26 @@ def brute_force(f: pd.DataFrame) -> Detections:
                       "minutes": int(len(w))})
 
 
+def dns_burst(f: pd.DataFrame) -> Detections:
+    """v5: one source sending at least 1,000 DNS queries in a minute. Low severity and
+    informational: in test data it was always software on an office machine, and it
+    is also the shape of DNS tunneling and domain-generating malware."""
+    f = f.assign(w=_window(f["ts"]))
+    s = f[f["dsport"] == DNS_PORT]
+    if s.empty:
+        return _empty()
+    g = s.groupby(["srcip", "w"]).agg(n=("dstip", "size"), servers=("dstip", "nunique")).reset_index()
+    fired = g[g["n"] >= DNS_BURST_MIN_QUERIES]
+    return _collect(
+        "dns_burst", s, fired, ["srcip"],
+        lambda r: str(r["srcip"].iloc[0]),
+        lambda r: "DNS (" + ", ".join(_top(r["dstip"], 2).keys()) + ")",
+        lambda r, w: {"queries": int(len(r)), "peak_queries_per_minute": int(w["n"].max()),
+                      "dns_servers": int(r["dstip"].nunique()), "minutes": int(len(w))})
+
+
 DETECTORS = {"scan_vertical": scan_vertical, "scan_horizontal": scan_horizontal, "flood": flood,
-             "brute_force": brute_force}
+             "brute_force": brute_force, "dns_burst": dns_burst}
 
 
 def run_all(flows: pd.DataFrame) -> Detections:
@@ -272,7 +326,7 @@ def run_all(flows: pd.DataFrame) -> Detections:
 # ---------------------------------------------------------------- for the app
 
 _NAMES = {"scan_vertical": "Port scan", "scan_horizontal": "Network sweep", "flood": "Flood",
-          "brute_force": "Brute force"}
+          "brute_force": "Brute force", "dns_burst": "DNS burst"}
 
 
 def _summary(e: dict) -> str:
@@ -284,6 +338,10 @@ def _summary(e: dict) -> str:
         return (f"Network sweep: {e['source']} probed {ev['distinct_targets']} hosts on "
                 f"{e['target']} (up to {ev['peak_targets_in_one_subnet']} in "
                 f"{ev['busiest_subnet']} in a minute), {ev['minutes']} min")
+    if d == "dns_burst":
+        return (f"DNS burst: {e['source']} sent {ev['queries']:,} DNS queries (up to "
+                f"{ev['peak_queries_per_minute']:,} a minute) to {ev['dns_servers']} server(s), "
+                f"{ev['minutes']} min")
     if d == "brute_force":
         return (f"Brute force: {e['source']} opened {ev['sessions']:,} {ev['service']} sessions to "
                 f"{e['target'].split(' ')[0]} (up to {ev['peak_sessions_per_minute']} a minute), "
