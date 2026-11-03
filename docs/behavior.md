@@ -254,3 +254,39 @@ pcap -> Zeek -> flows -+-> model: per-flow score and class -> model events (EV-.
   per-flow score.
 - The simulated demo days have no rule events (their flows carry no
   connection state).
+
+## v4: brute force (frozen before any run of it)
+
+One new detector; the scan and flood rules are unchanged from v3.
+
+| Detector | Measured per 60 s window | Fires when | MITRE |
+|---|---|---|---|
+| `brute_force` | one source → one target, one login service (ssh 22, ftp 21, telnet 23, rdp 3389, vnc 5900, pop3 110, imap 143): sessions that exchanged data | ≥ 20 sessions | T1110 |
+
+- **Why 20 a minute:** a person logs in a few times an hour; a guessing tool
+  connects, tries a password or a few, disconnects and repeats. 20 a minute is
+  far above any person and far below a guessing tool's usual pace. CIC's
+  published totals (a few thousand Patator rows per attack, each over about an
+  hour) were known when this was written; the threshold was set from the
+  principle, not fitted to them, and is several times below their average rate.
+- **Sessions only:** probes (refused, unanswered) are the scan rules' job, so a
+  scan of port 22 does not count here.
+- **SMB (445) is excluded:** Windows clients open many SMB sessions to domain
+  controllers and file servers.
+- **Blind spots:** the rule cannot see whether logins failed (SSH is
+  encrypted), so automation that logs in in a tight loop (backups,
+  configuration tools, monitoring) is a benign look-alike; guessing slower than
+  20 a minute; password spraying (one guess against many targets); brute force
+  of web logins (HTTP, Thursday), which has no fixed port.
+
+Rules for v4:
+
+| Day | Judged |
+|---|---|
+| **Tuesday** (held out) | B2: ≥ 90% of **FTP-Patator** and of **SSH-Patator** flows inside a true `brute_force` event. B1 for every detector. |
+| Monday, Wednesday, Friday | B1 for `brute_force` (it has never been run on them, so this is held out too); the other detectors as a regression check (expected identical to v3) |
+| Thursday | B1 for every detector |
+
+Predictions: Tuesday FTP-Patator and SSH-Patator both pass B2; 0 `brute_force`
+false events on Monday, Wednesday, Friday and Thursday (the office's SSH and FTP
+use is light: Monday has about 1,000 SSH and 460 FTP flows in the whole day).

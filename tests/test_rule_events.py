@@ -122,7 +122,8 @@ def test_score_pcap_writes_rule_events(tmp_path):
     (tmp_path / "cal.json").write_text(json.dumps({"source": "test", "choice": {}, "ct_lookup": None}))
     store = score_pcap(tmp_path / "scan.pcap", tmp_path / "out", tmp_path / "cal.json",
                        tmp_path / "s1.joblib", tmp_path / "s2.joblib")
-    assert store.meta["behavior"] == {"version": "v3", "events": 1}
+    from src.detect.behavior import VERSION
+    assert store.meta["behavior"] == {"version": VERSION, "events": 1}
     (rule,) = json.loads((tmp_path / "out" / "behavior.json").read_text())["events"]
     assert rule["detector"] == "scan_vertical" and rule["evidence"]["distinct_ports"] == 150
     assert DetectionStore.load(tmp_path / "out" / "flows.jsonl",

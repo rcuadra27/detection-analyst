@@ -79,8 +79,19 @@ RULE_NOTES = {
         "look-alike in test data is one internal client sending a burst of DNS queries to the "
         "DNS server; that is also what DNS tunneling looks like, so report it, at lower "
         "severity, rather than dismissing it. The noise check does not apply to rule events."),
+    "brute_force": (
+        "Counted, not scored: one source opened at least 20 sessions a minute to one login "
+        "service (ssh, ftp, telnet, rdp, vnc, pop3, imap) on one target, each one exchanging "
+        "data. People log in a few times an hour; a password-guessing tool connects, tries, "
+        "disconnects and repeats. Brute Force (T1110). The rule cannot see whether logins "
+        "failed (SSH is encrypted), so check the source: backup jobs, configuration tools or "
+        "monitoring that log in in a tight loop are the benign look-alikes. An external or "
+        "unknown source guessing passwords against an internal server is the attack pattern; "
+        "the next question is whether any session succeeded (long sessions, data transferred "
+        "afterwards). The noise check does not apply to rule events."),
 }
-RULE_DEFAULT_SEVERITY = {"scan_vertical": "medium", "scan_horizontal": "medium", "flood": "high"}
+RULE_DEFAULT_SEVERITY = {"scan_vertical": "medium", "scan_horizontal": "medium", "flood": "high",
+                         "brute_force": "medium"}
 
 
 def _is_probe(ev: dict) -> bool | None:

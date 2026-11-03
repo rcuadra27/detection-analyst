@@ -17,7 +17,8 @@ Follow these steps in order. Every claim in your answer must come from a tool re
 Call `get_event` with the `RULE-...` ID. Note `evidence` (the counts that made it fire), `how_to_read` (what it means and its benign look-alikes), `candidate_techniques` and `default_severity`.
 - The noise check does **not** apply: a rule event is a counted pattern, not a per-flow score. Do not dismiss it because the model flagged few of its flows (`model_view`); the model judges one flow at a time and misses scans and floods.
 - Decide whether it is an attack or a benign look-alike from the evidence: who the source is (internal or external), the target, the volume, and the look-alikes in `how_to_read`.
-- Severity: start from `default_severity`. Raise one level when an internal host scans or sweeps other internal hosts (possible compromised host). A flood from one client to the DNS server is lower severity: report it as worth checking, since DNS tunneling looks the same.
+- Severity: start from `default_severity`. Raise one level when an internal host scans or sweeps other internal hosts (possible compromised host). A flood from one client to the DNS server is lower severity: report it as worth checking, since DNS tunneling looks the same. For brute force, raise one level if `get_host_activity` on the target shows a long session from the same source after the burst (a guess may have succeeded).
+- A private source address is not proof the host is yours: a firewall or NAT can hide an outside attacker behind one. Say "private address", not "internal host", unless other evidence shows it belongs to the network.
 - If the same host also has model events, say whether they agree (for example, a scan followed by model-flagged exploit traffic to the same target).
 - Then go to step 4. Steps 2 and 3 are for model events.
 

@@ -20,6 +20,9 @@ Detectors (thresholds frozen in docs/behavior.md before any attack day was run):
   scan_horizontal  one source -> one port, within a 60 s window, at least half
                    probes, and either at least 50 targets inside one subnet
                    (/24, or /64 for IPv6) or at least 500 targets anywhere
+  brute_force      (v4) one source -> one target, one login service (ssh, ftp,
+                   telnet, rdp, vnc, pop3, imap), per 60 s: at least 20 sessions
+                   that exchanged data
   flood            one target service (address, port, protocol), per 60 s: at
                    least 1,000 connections and at least 10x the service's own
                    median over the previous 30 minutes
@@ -52,7 +55,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-VERSION = "v3"
+VERSION = "v4"
 WINDOW_S = 60.0
 NO_REPLY_STATES = ("REQ", "INT")
 PROBE_MAX_PKTS = 2
@@ -67,8 +70,14 @@ FLOOD_MULTIPLE = 10.0
 FLOOD_HISTORY_WINDOWS = 30
 FLOOD_MIN_HISTORY = 5          # windows since capture start before a flood can fire
 
+# v4: login services a password-guessing tool targets. SMB (445) is left out:
+# Windows clients open many SMB sessions to domain controllers and file servers.
+AUTH_PORTS = {21: "ftp", 22: "ssh", 23: "telnet", 3389: "rdp", 5900: "vnc",
+              110: "pop3", 143: "imap"}
+BRUTE_MIN_SESSIONS = 20        # per minute, one source -> one target, one login service
+
 TECHNIQUES = {"scan_vertical": "T1046", "scan_horizontal": "T1046",
-              "flood": "T1498/T1499"}
+              "flood": "T1498/T1499", "brute_force": "T1110"}
 
 
 @dataclass
@@ -220,7 +229,33 @@ def flood(f: pd.DataFrame) -> Detections:
                       "top_sources": _top(r["srcip"]), "minutes": int(len(w))})
 
 
-DETECTORS = {"scan_vertical": scan_vertical, "scan_horizontal": scan_horizontal, "flood": flood}
+def brute_force(f: pd.DataFrame) -> Detections:
+    """One source opening at least 20 real sessions a minute to one login service on
+    one target. A person logs in a few times an hour; a guessing tool connects, tries,
+    disconnects and repeats. Sessions only: probes (refused or unanswered) belong to
+    the scan rules. The rule cannot see whether logins failed (SSH is encrypted), so
+    automation that logs in in a tight loop is a benign look-alike."""
+    f = f.assign(w=_window(f["ts"]), probe=is_probe(f))
+    s = f[f["dsport"].isin(list(AUTH_PORTS)) & ~f["probe"]]
+    if s.empty:
+        return _empty()
+    g = s.groupby(["srcip", "dstip", "dsport", "w"]).size().rename("n").reset_index()
+    fired = g[g["n"] >= BRUTE_MIN_SESSIONS]
+    has_dur = "dur" in s.columns
+    return _collect(
+        "brute_force", s, fired, ["srcip", "dstip", "dsport"],
+        lambda r: str(r["srcip"].iloc[0]),
+        lambda r: f"{r['dstip'].iloc[0]}:{int(r['dsport'].iloc[0])} "
+                  f"({AUTH_PORTS[int(r['dsport'].iloc[0])]})",
+        lambda r, w: {"sessions": int(len(r)), "peak_sessions_per_minute": int(w["n"].max()),
+                      "service": AUTH_PORTS[int(r["dsport"].iloc[0])],
+                      "median_session_seconds": (round(float(pd.to_numeric(r["dur"], errors="coerce")
+                                                                .median()), 2) if has_dur else None),
+                      "minutes": int(len(w))})
+
+
+DETECTORS = {"scan_vertical": scan_vertical, "scan_horizontal": scan_horizontal, "flood": flood,
+             "brute_force": brute_force}
 
 
 def run_all(flows: pd.DataFrame) -> Detections:
@@ -236,7 +271,8 @@ def run_all(flows: pd.DataFrame) -> Detections:
 
 # ---------------------------------------------------------------- for the app
 
-_NAMES = {"scan_vertical": "Port scan", "scan_horizontal": "Network sweep", "flood": "Flood"}
+_NAMES = {"scan_vertical": "Port scan", "scan_horizontal": "Network sweep", "flood": "Flood",
+          "brute_force": "Brute force"}
 
 
 def _summary(e: dict) -> str:
@@ -248,6 +284,10 @@ def _summary(e: dict) -> str:
         return (f"Network sweep: {e['source']} probed {ev['distinct_targets']} hosts on "
                 f"{e['target']} (up to {ev['peak_targets_in_one_subnet']} in "
                 f"{ev['busiest_subnet']} in a minute), {ev['minutes']} min")
+    if d == "brute_force":
+        return (f"Brute force: {e['source']} opened {ev['sessions']:,} {ev['service']} sessions to "
+                f"{e['target'].split(' ')[0]} (up to {ev['peak_sessions_per_minute']} a minute), "
+                f"{ev['minutes']} min")
     top = next(iter(ev["top_sources"]), "?")
     return (f"Flood: {e['target']} received up to {ev['peak_per_minute']:,} connections a "
             f"minute (normal {ev['normal_per_minute']:g}), {ev['minutes']} min, mostly from {top}")

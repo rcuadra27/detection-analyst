@@ -126,3 +126,21 @@ def test_v3_internet_wide_scan_still_fires():
 def test_subnet_handles_ipv4_and_ipv6():
     s = B.subnet(pd.Series(["192.168.10.50", "fe80::223:aeff:fe9b:9567", "2001:db8:1:2:3::9"]))
     assert s.tolist() == ["192.168.10.0/24", "fe80::/64", "2001:db8:1:2::/64"]
+
+
+def test_v4_brute_force_fires_on_repeated_logins_not_on_a_scan():
+    rows = background() + [[T0 + 600 + i * 1.0, "172.16.0.1", "10.0.0.50", 22, "tcp", "FIN", 12, 10]
+                           for i in range(180)]                # 60 SSH sessions a minute, 3 minutes
+    det = B.run_all(_flows(rows))
+    (ev,) = det.events.to_dict("records")
+    assert (ev["detector"], ev["target"]) == ("brute_force", "10.0.0.50:22 (ssh)")
+    assert ev["evidence"]["sessions"] == 180 and ev["evidence"]["minutes"] in (3, 4)
+    (rec,) = B.to_records(det)
+    assert rec["technique_ids"] == ["T1110"] and rec["summary"].startswith("Brute force: 172.16.0.1")
+
+
+def test_v4_occasional_logins_and_probes_are_not_brute_force():
+    rows = background()
+    rows += [[T0 + 600 + i * 30.0, "10.0.0.7", "10.0.0.50", 22, "tcp", "FIN", 40, 38] for i in range(20)]
+    rows += [[T0 + 900 + i * 0.5, "10.0.0.8", "10.0.0.50", 22, "tcp", "REQ", 1, 0] for i in range(50)]
+    assert B.run_all(_flows(rows)).events.empty

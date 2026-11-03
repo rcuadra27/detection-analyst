@@ -149,10 +149,10 @@
   .host-meta { color: var(--muted); font-size: 13px; margin-top: 2px; }
   .risk { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); }
   .risk-track { flex: 1; height: 4px; border-radius: 2px; background: var(--risk-lo); overflow: hidden; }
-  .risk-fill { display: block; height: 100%; background: var(--risk-hi); }
+  .risk-fill { display: block; height: 100%; background: var(--accent); }   /* a score, not a verdict: no alarm colour */
   .rule-line { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; font-size: 13px; }
-  .rule-tag { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
-              padding: 1px 6px; border-radius: 4px; background: var(--crit-soft); color: var(--crit); }
+  .rule-tag { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .02em;
+              padding: 1px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
   .rule-text { color: var(--ink); overflow-wrap: anywhere; }
   .host-src { font-size: 12px; color: var(--muted); margin-top: 6px; }
   .rail-note { padding: 14px 18px 20px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); }
@@ -394,7 +394,12 @@ async function api(path, opts = {}) {
     "X-Access-Code": code, ...(opts.headers || {}) } });
   let body = {};
   try { body = await res.json(); } catch (e) {}
-  if (!res.ok) { const err = new Error(body.detail || res.statusText); err.status = res.status; throw err; }
+  if (!res.ok) {
+    // Over HTTP/2 statusText is empty: always say what failed, with the status code.
+    const what = body.detail || (res.statusText ? `${res.status} ${res.statusText}` : `HTTP ${res.status}`);
+    const err = new Error(body.detail ? what : `The server could not complete the request (${what}).`);
+    err.status = res.status; throw err;
+  }
   return body;
 }
 
@@ -482,7 +487,7 @@ async function loadEvents() {
     const ordered = [...hosts.values()].sort((x, y) =>
       (y.rules.length > 0) - (x.rules.length > 0) || y.risk_score - x.risk_score);
     $("events").innerHTML = ordered.map(h => {
-      const rules = h.rules.map(e => `<div class="rule-line"><span class="rule-tag">${esc(e.name)}</span>
+      const rules = h.rules.map(e => `<div class="rule-line"><span class="rule-tag">Rule: ${esc(e.name)}</span>
           <span class="rule-text">${esc(e.summary.replace(/^[^:]+:\s*/, ""))} <span class="scope">${esc(e.window)}</span></span></div>`).join("");
       let model = "";
       if (h.windows.length) {
@@ -495,7 +500,7 @@ async function loadEvents() {
       }
       return `<button class="host" data-src="${esc(h.source)}">
         <div class="host-row"><span class="host-ip">${esc(h.source)}</span>
-          <span class="scope">${h.internal ? "internal" : "external"}</span></div>
+          <span class="scope">${h.internal ? "private address" : "public address"}</span></div>
         ${rules}${model}
       </button>`;
     }).join("");
@@ -542,7 +547,7 @@ async function enterWorkspace(ds) {
   const label = $("scenarioLabel");
   label.textContent = ds ? `Your capture: ${ds.name}` : "Demo day: simulated network, real detector scores";
   label.classList.remove("hidden");
-  $("railSub").textContent = ds ? "Hosts flagged in your capture by the detection rules or the model. These are leads, not verdicts."
+  $("railSub").textContent = ds ? "Hosts flagged in your capture. Rule events come first: counted patterns such as scans and floods, which raised few false alarms in testing. Then the model's flagged windows, which are often noisy on networks unlike its training data. Leads, not verdicts."
                                 : "Hosts the detector flagged on the demo day. These are leads, not verdicts.";
   $("dataset").innerHTML = ds
     ? `<b>${esc(ds.name)}</b><br>${ds.n_flows.toLocaleString()} flows, ${ds.n_flagged.toLocaleString()} flagged by the model${ds.rule_events != null ? `, ${ds.rule_events} rule ${ds.rule_events === 1 ? "event" : "events"}` : ""}.
