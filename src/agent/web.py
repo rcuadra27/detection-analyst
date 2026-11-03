@@ -677,6 +677,7 @@ def _events_panel(dataset_dir: Path | None = None) -> dict:
         out["dataset"] = {k: m.get(k) for k in ("scenario", "n_flows", "n_flagged",
                                                  "false_positive_rate",
                                                  "false_positive_rate_source")}
+        out["dataset"]["rule_events"] = (m.get("behavior") or {}).get("events")
         _DATASET_EVENTS[key] = out
     return _DATASET_EVENTS[key]
 

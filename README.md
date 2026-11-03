@@ -360,6 +360,29 @@ then passed a rule set beforehand on two fresh captures (true rate 0%, upper
 bound 0.007%). UNSW cannot test the hard case, an innocent host the detector
 keeps flagging. Details: [docs/upload.md](docs/upload.md).
 
+## 6b. A different network: CIC-IDS2017, and behavioral rules
+
+Every Phase A capture came from the UNSW lab. On CIC-IDS2017 (another lab,
+labelled) the same pipeline showed the per-flow model does not transfer:
+
+| CIC day | Innocent flows flagged (model, 0.85) | Attacks flagged by the model | Behavioral rules |
+|---|---|---|---|
+| Monday (benign) | 55.5% (15.2% without TTL) | | 0-1 false events per rule |
+| Friday | 74.1% | PortScan 0.8%, DDoS 0.1% | PortScan 99.8%, DDoS 100% |
+| Wednesday (held out) | 56.8% | | DoS Hulk 99.8%, GoldenEye 65.4% (fail), Slowhttptest 85.3%, slowloris 0% |
+
+- The UNSW model keyed on source TTL, an artifact of the lab's layout and an
+  evasion route (attacks arriving at TTL 31 were caught 0.2% of the time).
+  Production models now drop the TTL features: about 1 point of recall on UNSW.
+- No threshold rescues the model on CIC: it ranks CIC's attacks below normal
+  traffic. A threshold learned on Monday (0.999) silenced Friday's attacks.
+- Behavioral rules (port scan, network sweep, flood) count patterns across a
+  host's flows instead of scoring single flows; nothing is trained. Each version
+  was frozen before a held-out day. Uploads now run both branches, and the alert
+  rail and the agent's tools show rule events next to model events.
+
+Details: [docs/cic_eval.md](docs/cic_eval.md), [docs/behavior.md](docs/behavior.md).
+
 ## 7. Repository layout
 
 ```
@@ -411,7 +434,7 @@ src/
     └── baseline.py        false-positive rate estimated from the capture; its validation
 
 .claude/skills/            investigate-event, disambiguate-hypotheses, write-incident-report
-tests/                     148 pytest tests (no API key; ingest and upload tests on synthetic pcaps need Zeek)
+tests/                     172 pytest tests (no API key; ingest and upload tests on synthetic pcaps need Zeek)
 docs/                      architecture diagram + example triage visuals
 data/scenario/             pre-scored dev investigation day (flows.jsonl, meta.json, truth.json)
 data/scenario_heldout/     held-out day v1, same files

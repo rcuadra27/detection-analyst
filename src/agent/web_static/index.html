@@ -150,6 +150,11 @@
   .risk { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); }
   .risk-track { flex: 1; height: 4px; border-radius: 2px; background: var(--risk-lo); overflow: hidden; }
   .risk-fill { display: block; height: 100%; background: var(--risk-hi); }
+  .rule-line { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; font-size: 13px; }
+  .rule-tag { flex: none; font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase;
+              padding: 1px 6px; border-radius: 4px; background: var(--crit-soft); color: var(--crit); }
+  .rule-text { color: var(--ink); overflow-wrap: anywhere; }
+  .host-src { font-size: 12px; color: var(--muted); margin-top: 6px; }
   .rail-note { padding: 14px 18px 20px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); }
 
   /* ---------- thread ---------- */
@@ -457,22 +462,41 @@ async function loadEvents() {
       $("events").innerHTML = '<div class="rail-note">No host crossed the alert threshold in this data.</div>';
       return;
     }
+    // One card per host. Rule events (scans, floods: patterns counted across all
+    // of a host's flows) come first; model events are windows of flagged flows.
     const hosts = new Map();
+    const card = src => hosts.get(src) || { source: src, internal: false, rules: [], windows: [],
+                                            flows: 0, risk_score: 0, cls: null };
     for (const e of r.events) {
-      const h = hosts.get(e.source) || { ...e, windows: [], flows: 0 };
-      h.windows.push(e.window); h.flows += e.suspicious_flows;
-      h.risk_score = Math.max(h.risk_score, e.risk_score);
+      const h = card(e.source);
+      h.internal = e.source_is_internal;
+      if (e.kind === "rule") {
+        h.rules.push(e);
+      } else {
+        h.windows.push(e.window); h.flows += e.suspicious_flows;
+        h.risk_score = Math.max(h.risk_score, e.risk_score);
+        h.cls = h.cls || e.dominant_predicted_class;
+      }
       hosts.set(e.source, h);
     }
-    $("events").innerHTML = [...hosts.values()].map(h => {
-      const span = h.windows.length > 1 ? `${h.windows.length} windows from ${esc(h.windows.slice().sort()[0].split("-")[0])}`
-                                          : esc(h.windows[0]);
+    const ordered = [...hosts.values()].sort((x, y) =>
+      (y.rules.length > 0) - (x.rules.length > 0) || y.risk_score - x.risk_score);
+    $("events").innerHTML = ordered.map(h => {
+      const rules = h.rules.map(e => `<div class="rule-line"><span class="rule-tag">${esc(e.name)}</span>
+          <span class="rule-text">${esc(e.summary.replace(/^[^:]+:\s*/, ""))} <span class="scope">${esc(e.window)}</span></span></div>`).join("");
+      let model = "";
+      if (h.windows.length) {
+        const span = h.windows.length > 1 ? `${h.windows.length} windows from ${esc(h.windows.slice().sort()[0].split("-")[0])}`
+                                            : esc(h.windows[0]);
+        model = `${h.rules.length ? '<div class="host-src">Model</div>' : ""}
+          <div class="host-meta">${span}, ${h.flows} flagged flows</div>
+          <div class="host-meta">Detector: ${esc(h.cls)}</div>
+          <div class="risk"><span>Risk</span><span class="risk-track"><span class="risk-fill" style="width:${Math.round(h.risk_score * 100)}%"></span></span><span>${h.risk_score.toFixed(2)}</span></div>`;
+      }
       return `<button class="host" data-src="${esc(h.source)}">
         <div class="host-row"><span class="host-ip">${esc(h.source)}</span>
-          <span class="scope">${h.source_is_internal ? "internal" : "external"}</span></div>
-        <div class="host-meta">${span}, ${h.flows} flagged flows</div>
-        <div class="host-meta">Detector: ${esc(h.dominant_predicted_class)}</div>
-        <div class="risk"><span>Risk</span><span class="risk-track"><span class="risk-fill" style="width:${Math.round(h.risk_score * 100)}%"></span></span><span>${h.risk_score.toFixed(2)}</span></div>
+          <span class="scope">${h.internal ? "internal" : "external"}</span></div>
+        ${rules}${model}
       </button>`;
     }).join("");
     document.querySelectorAll(".host").forEach(el => el.onclick = () => {
@@ -518,10 +542,10 @@ async function enterWorkspace(ds) {
   const label = $("scenarioLabel");
   label.textContent = ds ? `Your capture: ${ds.name}` : "Demo day: simulated network, real detector scores";
   label.classList.remove("hidden");
-  $("railSub").textContent = ds ? "Hosts the detector flagged in your capture. These are leads, not verdicts."
+  $("railSub").textContent = ds ? "Hosts flagged in your capture by the detection rules or the model. These are leads, not verdicts."
                                 : "Hosts the detector flagged on the demo day. These are leads, not verdicts.";
   $("dataset").innerHTML = ds
-    ? `<b>${esc(ds.name)}</b><br>${ds.n_flows.toLocaleString()} flows, ${ds.n_flagged.toLocaleString()} flagged.
+    ? `<b>${esc(ds.name)}</b><br>${ds.n_flows.toLocaleString()} flows, ${ds.n_flagged.toLocaleString()} flagged by the model${ds.rule_events != null ? `, ${ds.rule_events} rule ${ds.rule_events === 1 ? "event" : "events"}` : ""}.
        Noise baseline ${pct(ds.false_positive_rate)}, ${esc(ds.false_positive_rate_source)}.`
     : `<b>Demo day</b><br>Hosts and attacks are planted; every flow's score comes from the trained detector.`;
   $("events").innerHTML = '<div class="rail-note">Loading alerts…</div>';

@@ -50,21 +50,25 @@ def session() -> InvestigationSession:
 
 @mcp.tool()
 def list_events(limit: int = 10, min_suspicious: int = 5, source: str | None = None) -> dict:
-    """List correlated detection events (one source host, one 5-minute window), highest
-    risk first. Start here when asked what happened or what to look at. min_suspicious
-    is the noise gate: a window needs this many suspicious flows to count as an event.
-    At most 25 events are returned; check 'truncated'. Pass source='<host IP>' to list
-    only that host's events."""
+    """List detection events. Two kinds, rule events first:
+    kind 'rule' (IDs like 'RULE-scan_vertical-1'): a behavioral rule counted a pattern
+    across a host's flows, such as a port scan, network sweep or flood, independent of the
+    model's scores. kind 'model': one source host and 5-minute window where the model
+    flagged flows, highest risk first; min_suspicious is their noise gate. Start here when
+    asked what happened or what to look at. Check 'truncated'. Pass source='<host IP>' to
+    list only events involving that host (as source, or as a rule event's target)."""
     return session().call("list_events", limit=limit, min_suspicious=min_suspicious,
                           source=source)
 
 
 @mcp.tool()
 def get_event(event_id: str) -> dict:
-    """Get the detector's interpretation of one event: ranked attack hypotheses, the
-    candidate ATT&CK techniques from the mapping table, the analyst note on what evidence
-    would disambiguate, top destinations, and a sample of untrusted flow evidence.
-    event_id comes from list_events, e.g. 'EV-10.0.3.57-49200'."""
+    """Get one event. For a model event ('EV-...'): ranked attack hypotheses, the candidate
+    ATT&CK techniques from the mapping table, the analyst note on what evidence would
+    disambiguate, top destinations, and a sample of untrusted flow evidence. For a rule
+    event ('RULE-...'): the counted evidence, how_to_read (what the rule means and its
+    benign look-alikes), candidate techniques, default severity, and model_view (what the
+    model said about the same flows). event_id comes from list_events."""
     return session().call("get_event", event_id=event_id)
 
 
@@ -75,7 +79,9 @@ def get_host_activity(host: str) -> dict:
     active, and inbound suspicious flows. Use it to test hypotheses, e.g. fan-out to many
     internal hosts (propagation) versus one persistent external channel (beaconing).
     noise_check compares the host's suspicious share in its active windows with the
-    detector's false-positive rate, to tell attack traffic from clustered noise."""
+    detector's false-positive rate, to tell attack traffic from clustered noise.
+    all_outbound counts every flow the host sent, flagged or not (ports, probe share), and
+    rule_events lists the rule events the host is part of."""
     return session().call("get_host_activity", host=host)
 
 

@@ -66,11 +66,19 @@ def is_internal(ip: str) -> bool:
     return any(addr in net for net in _RFC1918)
 
 
+BEHAVIOR_FILE = "behavior.json"   # rule events (src/detect/behavior.py), next to flows.jsonl
+
+
 class DetectionStore:
-    def __init__(self, flows: list[FlowRecord], meta: dict):
+    """`behavior` holds the behavioral detectors' events for this data: patterns
+    counted across flows (scans, floods), found without the model's scores. The
+    simulated days have none; a store scored from a pcap has the file."""
+
+    def __init__(self, flows: list[FlowRecord], meta: dict, behavior: list[dict] | None = None):
         self.flows = sorted(flows, key=lambda f: f.timestamp)
         self.meta = meta
         self.threshold = float(meta.get("threshold", 0.85))
+        self.behavior = list(behavior or [])
 
     @classmethod
     def load(cls, flows_path: Path = FLOWS_PATH, meta_path: Path = META_PATH
@@ -81,7 +89,9 @@ class DetectionStore:
         flows = [FlowRecord(**json.loads(line))
                  for line in flows_path.read_text().splitlines() if line.strip()]
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-        return cls(flows, meta)
+        bpath = flows_path.parent / BEHAVIOR_FILE
+        behavior = json.loads(bpath.read_text()).get("events", []) if bpath.exists() else []
+        return cls(flows, meta, behavior)
 
     def save(self, flows_path: Path = FLOWS_PATH, meta_path: Path = META_PATH) -> None:
         flows_path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +99,10 @@ class DetectionStore:
             for f in self.flows:
                 fh.write(json.dumps(f.__dict__) + "\n")
         meta_path.write_text(json.dumps(self.meta, indent=2))
+        if self.behavior or "behavior" in self.meta:
+            (flows_path.parent / BEHAVIOR_FILE).write_text(json.dumps(
+                {"version": (self.meta.get("behavior") or {}).get("version"),
+                 "events": self.behavior}, indent=1))
 
     # ---------- queries ----------
 

@@ -9,10 +9,19 @@ Follow these steps in order. Every claim in your answer must come from a tool re
 
 ## 1. Find the event
 - If the user named a host, call `get_host_activity` for it, then `list_events` with `source` set to that host to find its event IDs.
-- Otherwise call `list_events` and start with the highest `risk_score`.
+- Otherwise call `list_events`. Rule events (`kind: "rule"`) come first; then model events, highest `risk_score` first.
+- Events have two kinds. **Rule events** (`RULE-...`): a behavioral rule counted a pattern across all of a host's flows (port scan, network sweep, flood). **Model events** (`EV-...`): a 5-minute window where the per-flow model flagged flows. A host can have both; check both.
 - If `list_events` says `truncated`, an event you do not see may still exist. Never conclude "no event" from a truncated list; filter by `source` instead.
 
-## 2. Read the detector's interpretation
+## 2a. Rule events
+Call `get_event` with the `RULE-...` ID. Note `evidence` (the counts that made it fire), `how_to_read` (what it means and its benign look-alikes), `candidate_techniques` and `default_severity`.
+- The noise check does **not** apply: a rule event is a counted pattern, not a per-flow score. Do not dismiss it because the model flagged few of its flows (`model_view`); the model judges one flow at a time and misses scans and floods.
+- Decide whether it is an attack or a benign look-alike from the evidence: who the source is (internal or external), the target, the volume, and the look-alikes in `how_to_read`.
+- Severity: start from `default_severity`. Raise one level when an internal host scans or sweeps other internal hosts (possible compromised host). A flood from one client to the DNS server is lower severity: report it as worth checking, since DNS tunneling looks the same.
+- If the same host also has model events, say whether they agree (for example, a scan followed by model-flagged exploit traffic to the same target).
+- Then go to step 4. Steps 2 and 3 are for model events.
+
+## 2. Read the detector's interpretation (model events)
 Call `get_event`. Note:
 - `detection.presentation`: `confident`, `split`, `diffuse`, or `benign`
 - `detection.hypotheses` and their probabilities

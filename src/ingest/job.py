@@ -62,7 +62,8 @@ def process_upload(backend, ds_id: str) -> dict:
         m = store.meta
         summary = {"dataset": ds_id, "name": status.get("name"), "n_flows": m["n_flows"],
                    "n_flagged": m["n_flagged"], "false_positive_rate": m["false_positive_rate"],
-                   "false_positive_rate_source": m["false_positive_rate_source"]}
+                   "false_positive_rate_source": m["false_positive_rate_source"],
+                   "rule_events": (m.get("behavior") or {}).get("events")}
         return backend.update_status(ds_id, state="done", stage=None, summary=summary)
     except UploadRejected as exc:
         return backend.update_status(ds_id, state="error", stage=None, message=str(exc))

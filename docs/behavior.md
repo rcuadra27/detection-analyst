@@ -225,3 +225,32 @@ of connections a minute in bursts).
 
 `scan_vertical`, `scan_horizontal` (v3) and `flood` are frozen at v3. Known
 gaps: floods near the 1,000 floor, slow DoS, beaconing, brute force.
+
+## In the app
+
+Since this change the upload path runs both branches on the same Zeek flows:
+
+```
+pcap -> Zeek -> flows -+-> model: per-flow score and class -> model events (EV-...)
+                       +-> rules: scan, sweep, flood (v3)  -> rule events (RULE-...)
+```
+
+- `score_pcap` runs the detectors after the model and writes `behavior.json`
+  next to `flows.jsonl` (`meta.behavior` holds the version and the count; a
+  detector failure is recorded there and never loses the model's output). The
+  upload job copies the file to the bucket; stores scored earlier have no file
+  and load with no rule events.
+- The alert rail shows one card per host: its rule events first (name,
+  counted evidence, minutes), then the model's windows and risk.
+- The agent's tools: `list_events` lists rule events first, with
+  `kind: "rule"`; `get_event` on a `RULE-...` ID returns the evidence,
+  `how_to_read` (meaning and benign look-alikes), candidate techniques, a
+  default severity and `model_view` (what the model said about the same flows);
+  `get_host_activity` adds `all_outbound` (ports and probe share over every flow
+  the host sent) and the host's rule events; `submit_triage` accepts the rule's
+  techniques and still requires a reason to call a rule event a false positive.
+- The `investigate-event` skill has a step for rule events, and the noise check
+  (Step 0 in `pairs.md`) is limited to model events: a counted pattern is not a
+  per-flow score.
+- The simulated demo days have no rule events (their flows carry no
+  connection state).

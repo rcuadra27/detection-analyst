@@ -114,6 +114,8 @@ def _collect(name: str, f: pd.DataFrame, fired: pd.DataFrame, keys: list[str],
                        "source": source_of(rows), "target": target_of(rows),
                        "start": float(rows["ts"].min()), "end": float(rows["ts"].max()),
                        "flows": int(len(rows)),
+                       "target_host": str(rows["dstip"].iloc[0]) if "dstip" in keys else None,
+                       "target_port": int(rows["dsport"].iloc[0]) if "dsport" in keys else None,
                        "evidence": evidence_of(rows, fired[fired["run"] == run])})
         members.append(pd.DataFrame({"event_id": eid, "flow": m["index"].values}))
     return Detections(pd.DataFrame(events), pd.concat(members, ignore_index=True))
@@ -230,3 +232,47 @@ def run_all(flows: pd.DataFrame) -> Detections:
     return Detections(pd.concat([d.events for d in out if len(d.events)], ignore_index=True)
                       if any(len(d.events) for d in out) else _empty().events,
                       pd.concat([d.members for d in out], ignore_index=True))
+
+
+# ---------------------------------------------------------------- for the app
+
+_NAMES = {"scan_vertical": "Port scan", "scan_horizontal": "Network sweep", "flood": "Flood"}
+
+
+def _summary(e: dict) -> str:
+    ev, d = e["evidence"], e["detector"]
+    if d == "scan_vertical":
+        return (f"Port scan: {e['source']} probed {ev['distinct_ports']} ports on {e['target']} "
+                f"({ev['probe_share']:.0%} unanswered or refused), {ev['minutes']} min")
+    if d == "scan_horizontal":
+        return (f"Network sweep: {e['source']} probed {ev['distinct_targets']} hosts on "
+                f"{e['target']} (up to {ev['peak_targets_in_one_subnet']} in "
+                f"{ev['busiest_subnet']} in a minute), {ev['minutes']} min")
+    top = next(iter(ev["top_sources"]), "?")
+    return (f"Flood: {e['target']} received up to {ev['peak_per_minute']:,} connections a "
+            f"minute (normal {ev['normal_per_minute']:g}), {ev['minutes']} min, mostly from {top}")
+
+
+def to_records(det: Detections) -> list[dict]:
+    """Events as JSON-ready dicts for the store (behavior.json) and the agent's tools.
+
+    `source` is the host the event is about: the scanner, or a flood's main sender.
+    `sources` lists the senders behind at least 10% of a flood's connections (an
+    event also holds the target's normal traffic in those minutes)."""
+    out = []
+    for e in det.events.to_dict("records"):
+        if e["detector"] == "flood":
+            top = e["evidence"]["top_sources"]
+            srcs = [s for s, n in top.items() if n >= 0.1 * e["flows"]] or list(top)[:1]
+        else:
+            srcs = [e["source"]]
+        rec = {"event_id": f"RULE-{e['event_id']}", "detector": e["detector"],
+               "name": _NAMES[e["detector"]],
+               "technique_ids": e["technique"].split("/"),
+               "source": srcs[0], "sources": srcs, "target": e["target"],
+               "target_host": e.get("target_host"), "target_port": e.get("target_port"),
+               "start": float(e["start"]), "end": float(e["end"]), "flows": int(e["flows"]),
+               "evidence": e["evidence"], "version": VERSION}
+        rec["summary"] = _summary({**rec, "source": srcs[0]})
+        out.append(rec)
+    return out

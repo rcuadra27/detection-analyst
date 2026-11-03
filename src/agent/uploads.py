@@ -36,6 +36,7 @@ import threading
 from pathlib import Path
 
 STORE_FILES = ("flows.jsonl", "meta.json")
+OPTIONAL_STORE_FILES = ("behavior.json",)   # absent in stores scored before the rule events
 SIGNED_URL_MINUTES = 30
 
 
@@ -126,6 +127,9 @@ class LocalBackend(UploadBackend):
         out.mkdir(parents=True, exist_ok=True)
         for f in STORE_FILES:
             shutil.copyfile(Path(store_dir) / f, out / f)
+        for f in OPTIONAL_STORE_FILES:
+            if (Path(store_dir) / f).exists():
+                shutil.copyfile(Path(store_dir) / f, out / f)
 
     def local_store(self, ds_id: str) -> Path:
         return self._dir(ds_id) / "store"
@@ -216,7 +220,9 @@ class GCSBackend(UploadBackend):
             b.delete()
 
     def put_store(self, ds_id: str, store_dir: Path) -> None:
-        for f in STORE_FILES:
+        for f in STORE_FILES + OPTIONAL_STORE_FILES:
+            if f in OPTIONAL_STORE_FILES and not (Path(store_dir) / f).exists():
+                continue
             self.bucket.blob(self._key(ds_id, f"store/{f}")).upload_from_filename(
                 str(Path(store_dir) / f))
 
@@ -227,6 +233,10 @@ class GCSBackend(UploadBackend):
             d.mkdir(parents=True, exist_ok=True)
             for f in STORE_FILES:
                 self.bucket.blob(self._key(ds_id, f"store/{f}")).download_to_filename(str(d / f))
+            for f in OPTIONAL_STORE_FILES:
+                b = self.bucket.blob(self._key(ds_id, f"store/{f}"))
+                if b.exists():
+                    b.download_to_filename(str(d / f))
         return d
 
     def delete(self, ds_id: str) -> None:

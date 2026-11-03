@@ -451,7 +451,15 @@ def test_the_job_scores_from_the_bucket_and_writes_back(stub_scoring, tmp_path):
     rec = process_upload(gcs, "up-abc")
     assert rec["state"] == "done" and rec["summary"]["n_flows"] == 71
     assert set(bucket.store) == {"uploads/up-abc/status.json", "uploads/up-abc/store/flows.jsonl",
-                                 "uploads/up-abc/store/meta.json"}       # pcap deleted
+                                 "uploads/up-abc/store/meta.json",
+                                 "uploads/up-abc/store/behavior.json"}   # pcap deleted
+    assert rec["summary"]["rule_events"] == 0          # a 30-port scan is under the 100-port rule
     local = gcs.local_store("up-abc")                                    # what the web app reads
     assert (local / "flows.jsonl").read_bytes() == bucket.store["uploads/up-abc/store/flows.jsonl"]
+    assert (local / "behavior.json").exists()
+    # A store scored before rule events existed has no behavior.json: still loads.
+    del bucket.store["uploads/up-abc/store/behavior.json"]
+    import shutil
+    shutil.rmtree(local)
+    assert not (gcs.local_store("up-abc") / "behavior.json").exists()
     assert [r["state"] for r in gcs.list_status()] == ["done"]

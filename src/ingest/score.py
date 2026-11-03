@@ -135,6 +135,17 @@ def _sha256(path: Path, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+def _behavior(feats: pd.DataFrame) -> tuple[dict, list[dict]]:
+    """The behavioral detectors on the same flows (docs/behavior.md). They do not use
+    the model's scores. A failure here is recorded, never fatal to the scoring."""
+    from src.detect.behavior import VERSION, run_all, to_records
+    try:
+        rules = to_records(run_all(feats)) if len(feats) else []
+        return {"version": VERSION, "events": len(rules)}, rules
+    except Exception as exc:          # noqa: BLE001 - report, do not lose the model output
+        return {"version": VERSION, "events": 0, "error": f"{type(exc).__name__}: {exc}"}, []
+
+
 def score_pcap(pcap: Path, out_dir: Path, calibration: Path = CALIBRATION_PATH,
                stage1: Path | None = None, stage2: Path | None = None,
                threshold: float = THRESHOLD, name: str | None = None,
@@ -188,7 +199,8 @@ def score_pcap(pcap: Path, out_dir: Path, calibration: Path = CALIBRATION_PATH,
         "calibration": cal.get("source"),
         "built_at": dt.datetime.now().isoformat(timespec="seconds"),
     }
-    store = DetectionStore(flows, meta)
+    meta["behavior"], rules = _behavior(feats)
+    store = DetectionStore(flows, meta, rules)
     store.save(out_dir / "flows.jsonl", out_dir / "meta.json")
     return store
 
