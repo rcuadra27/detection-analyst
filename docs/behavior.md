@@ -176,3 +176,52 @@ Held-out tests for v3 (none run yet):
 Predictions for v3: Monday and Friday horizontal false events 0 (regression
 check); Wednesday and Tuesday horizontal false events 0; the other v2
 predictions stand.
+
+## Results, v3
+
+### Regression check (Monday, Friday)
+
+| | Monday | Friday |
+|---|---|---|
+| `scan_vertical` | 0 false | 3 true, 1 false (backscatter) |
+| `scan_horizontal` | **0 false** (v2: 2) | 0 false |
+| `flood` | 1 false (busy DNS client) | 1 true, 1 false (busy DNS client) |
+| Coverage | | PortScan 99.8%, DDoS 100%, Bot 0% |
+
+As predicted: the subnet rule removed the Mac's false events and changed nothing
+else.
+
+### Held-out: Wednesday
+
+| Rule | Result | Verdict |
+|---|---|---|
+| B1 `scan_vertical`, `scan_horizontal` | 0 and 0 false events | usable |
+| B1 `flood` | 1 false event: 192.168.10.8 sent 1,911 DNS queries in a minute to the domain controller | usable |
+| **B2 DoS Hulk** | **99.8%** (one event, 18 minutes, peak 10,374 a minute, normal 7.5) | **pass** |
+| **B2 DoS GoldenEye** | **65.4%** (two events, peaks 1,226 and 1,461 a minute) | **fail** |
+
+Reported, not judged: DoS Slowhttptest 85.3% (four one- or two-minute events at
+2,400-4,300 connections); DoS slowloris 0%; Heartbleed 0% (one flow). The
+per-flow model on the same day flagged 56.8% of innocent flows (rule 1 fail).
+
+Predictions: right on Hulk, slowloris, Heartbleed and B1; wrong on GoldenEye
+(predicted pass) and Slowhttptest (predicted missed; the tool opened thousands
+of connections a minute in bursts).
+
+- **GoldenEye:** it ran just above the 1,000-a-minute floor; minutes below the
+  floor fell outside the events. The binding condition was the floor, not 10×
+  normal (the server's normal was 0). A fix (keep a flood in alarm while it
+  stays ≥ 10× normal, even under the floor) is not adopted: CIC has no other
+  flood day to test it held-out. It needs another dataset (UNSW DoS, CIC-IDS2018).
+- **Slowloris:** a few hundred long, nearly idle connections; no rate rule sees
+  it. A separate detector (many long idle connections to one server) would.
+- **The DNS burst** recurs every day (Monday and Friday 192.168.10.14,
+  Wednesday 192.168.10.8, 1,000-1,900 queries a minute). CIC labels it benign;
+  it is also what DNS tunneling and domain-generating malware look like. A
+  separate, lower-severity "DNS burst" detector would describe it better than
+  `flood`.
+
+### Status
+
+`scan_vertical`, `scan_horizontal` (v3) and `flood` are frozen at v3. Known
+gaps: floods near the 1,000 floor, slow DoS, beaconing, brute force.
