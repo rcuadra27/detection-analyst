@@ -193,3 +193,60 @@ toward 0.5 but still fails M1.
 ```
 caffeinate -i python -m src.detect.model_v2 --csv-dir "data/raw/cic2017/csv/TrafficLabelling " --variant no_rtt
 ```
+
+## Results, ablation A (`no_rtt`)
+
+| Exp | Test | AUC (base → no_rtt) | False alarms | Recall at the training threshold (base → no_rtt) |
+|---|---|---|---|---|
+| E4 | UNSW test | 0.981 → 0.981 | 0.068% | about unchanged |
+| E1 | CIC days | 0.14-0.31 → **0.11-0.38** | 4.2-4.3% (fail) | 0% everywhere |
+| E2 | UNSW test | 0.683 → 0.681 | 7.18% (fail) | 1-2% |
+| E3 | Tuesday | 0.999 → **0.790** | 0.001% | brute_force 56% → **0%** |
+| E3 | Wednesday | 0.993 → 0.992 | 0.003% | dos 64% → **0%** |
+| E3 | Thursday | 0.975 → 0.967 | 0.002% | scan 92% → 73%, web_attack 42% → **0%** |
+| E3 | Friday | 0.992 → 0.988 | 0.003% | scan 55% → 48%, dos 0% |
+
+Held-out models' top features without the timings: `state` (0.11-0.24 on
+Wednesday, Thursday, Friday) and the `ct_*` connection counts (`ct_src_ltm`,
+`ct_dst_src_ltm`, `ct_srv_dst`, `ct_dst_sport_ltm`); on Tuesday `sinpkt`
+first. Window sizes barely register.
+
+**Rule A1: not met.** E3 stayed at or above 0.90 on three of the four attack
+days, so by the frozen rule the handshake timings were not what carried E3,
+except on Tuesday, where AUC fell from 0.999 to 0.790: the brute-force result
+did rest on "connected from outside the firewall".
+
+**Rule A2:** E1 and E2 fail M1 again. Nothing goes to a third dataset.
+
+Predictions: right that Tuesday drops and Thursday and Friday hold; wrong on
+Wednesday, whose AUC held.
+
+**What AUC hid.** At the operating threshold (0.1% of training normal flows
+flagged) recall collapsed: brute force, DoS and web attacks went to 0%. The
+ranking separates attacks from the bulk of normal traffic, but not from the
+top 0.1% of it, which is where a usable alert threshold has to sit. AUC
+answers "can it rank"; the false-alarm budget decides whether that ranking is
+any use.
+
+**What the model learns without position.** Connection state and connection
+counts: how many connections a source made, to how many services. That is the
+pattern the behavioral rules already count directly, with thresholds that
+travel across networks and explanations attached. On flow statistics alone the
+model rediscovers the rules, less reliably.
+
+## Conclusion of the first cut
+
+1. Each lab encodes its layout in its labels (UNSW: TTL; CIC: connections from
+   outside the firewall), and a per-flow model learns the layout first.
+2. Mixing two labs teaches both layouts; the features identify the source
+   network with 99.99% accuracy.
+3. With position features removed, what is left are connection counts and
+   states, which the rules already cover.
+4. The model's intended job, attacks inside one connection (web attacks,
+   exploits), needs **content** it does not have: 0% on web attacks without
+   the timings. More flow-statistics data will not supply that.
+
+The model stays as one weak signal. The next model work, when it happens, is
+content features (Zeek's HTTP fields: methods, URIs, status codes, body
+sizes) for web attacks, not more datasets of the same 42 features. CTU-13 is
+deferred until there is a candidate that passes M1.
