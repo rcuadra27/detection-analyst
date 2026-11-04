@@ -124,6 +124,72 @@ output in `data/processed/model_v2/` (`report.md`, `results.json`, and the
 training table cached as `table.pkl`; `--rebuild` rebuilds it). Each fit uses
 the production pipeline without TTL; datasets carry equal total weight.
 
-## Results
+## Results, first cut (base features: the 42 minus TTL)
 
-(none yet)
+Training table: UNSW 257,673 rows; CIC 1,495,902 rows (200,000 normal per day
+plus every attack row). The Thursday correction relabelled 67,670 flows to
+`scan`.
+
+| Exp | Test | AUC | False alarms (training threshold) | Recall | M1 |
+|---|---|---|---|---|---|
+| E4 | UNSW test | 0.981 | 0.116% (degraded) | botnet 93%, dos 84%, other 75%, exploit 71%, scan 62% | |
+| E1 | Monday | n/a | 3.71% (fail) | | fail |
+| E1 | Tuesday | **0.315** | 4.07% (fail) | brute_force 0% | fail |
+| E1 | Wednesday | **0.182** | 4.10% (fail) | dos 0% | fail |
+| E1 | Thursday | **0.243** | 4.23% (fail) | scan 0%, web_attack 0%, exploit 12% | fail |
+| E1 | Friday | **0.137** | 6.89% (fail) | botnet 0%, dos 0%, scan 0% | fail |
+| E2 | UNSW test | **0.683** | 5.25% (fail) | botnet 0%, dos 2%, exploit 1%, scan 1%, other 3% | fail |
+| E3 | Monday | n/a | 0.015% (usable) | | |
+| E3 | Tuesday | 0.999 | 0.001% | brute_force 56% | |
+| E3 | Wednesday | 0.993 | 0.003% | dos 64% | |
+| E3 | Thursday | 0.975 | 0.004% | scan 92%, web_attack 42%, exploit 12% | |
+| E3 | Friday | 0.992 | 0.004% | scan 55%, dos 0%, botnet 0% | |
+
+Dataset check (normal rows only): accuracy 99.99%, AUC 1.0. The features tell
+UNSW from CIC perfectly.
+
+Predictions: all held. E1 is not merely poor but inverted (AUC 0.14-0.31: the
+UNSW model ranks CIC's attacks below its normal traffic); E2 transfers
+poorly; both fail M1, so neither model goes to a third-dataset test.
+
+**E3 is suspiciously good.** Tuesday is the only day with brute force, so the
+Tuesday-held-out model never saw a brute-force flow, yet ranks them above
+normal traffic at AUC 0.999. Two checks on that model:
+
+- Benign flows from the attacker's address (172.16.0.1): only 2 exist, so the
+  "does it recognise the attacker's address" test says nothing.
+- Permutation importance on Tuesday: `ackdat` 0.163, `synack` 0.023, `state`
+  0.012, `ct_srv_dst` 0.008, everything else below 0.001.
+
+`ackdat` and `synack` are TCP handshake timings measured at the sensor: they
+grow with the connecting machine's distance from it. In CIC, office machines
+connect out (client near, small `ackdat`) and every attack connects in from
+the attacker network through the firewall (client far, large `ackdat`). The
+likely lesson E3 learned is "connections started from outside the firewall are
+attacks": the same family as the TTL shortcut (where a machine sits), through
+a different feature. On a real network it would flag every customer of a
+public web server and miss attackers already inside.
+
+## Ablation A: without the handshake timings (frozen before the run)
+
+Variant `no_rtt` drops `tcprtt`, `synack` and `ackdat` as well as TTL, and
+reruns everything on the cached table (`--variant no_rtt`). E3 runs record each
+held-out model's top features.
+
+- **Rule A1.** If E3's AUC falls below 0.90 on at least three of the four
+  attack days, E3 was measuring network position and is not evidence about
+  attack behaviour. If it stays at or above 0.90 on at least three, the
+  handshake timings were not what carried it; the top features are then
+  inspected for the next position signal (window sizes, `swin`/`dwin`, are the
+  first suspects: they identify operating systems).
+- **Rule A2.** M1 is re-judged for E1 and E2 under `no_rtt`; nothing goes to
+  a third dataset unless M1 passes.
+
+Predictions: E3 drops on Tuesday and Wednesday (connection-level attacks whose
+flows otherwise look ordinary) and holds better on Thursday and Friday (scans,
+whose probes differ in state and size anyway), so A1 is borderline; E1 rises
+toward 0.5 but still fails M1.
+
+```
+caffeinate -i python -m src.detect.model_v2 --csv-dir "data/raw/cic2017/csv/TrafficLabelling " --variant no_rtt
+```

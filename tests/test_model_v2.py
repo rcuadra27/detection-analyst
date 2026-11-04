@@ -84,3 +84,15 @@ def test_report_names_the_m1_verdicts(tmp_path):
     M.write_report(res, {"monday": {"rows": 2000}}, tmp_path)
     text = (tmp_path / "report.md").read_text()
     assert "| E1 | friday |" in text and "| E2 | unsw test |" in text and "Dataset check" in text
+
+
+def test_no_rtt_variant_drops_the_handshake_timings(tmp_path):
+    from src.detect.two_stage import PRODUCTION_DROP
+    assert set(M.VARIANTS["no_rtt"]) == set(PRODUCTION_DROP) | {"tcprtt", "synack", "ackdat"}
+    t = table()
+    model, _ = M.fit(t[t["dataset"] == "unsw"], M.VARIANTS["no_rtt"])
+    assert set(model.named_steps["drop"].columns) >= {"tcprtt", "synack", "ackdat"}
+    res = M.run_all(t, M.VARIANTS["no_rtt"], importances=True)
+    assert "top_features" in res["E3"]["friday"]
+    M.write_report(res, {}, tmp_path, "no_rtt")
+    assert "no_rtt: dropped" in (tmp_path / "report_no_rtt.md").read_text()

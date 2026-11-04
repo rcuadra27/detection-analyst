@@ -63,6 +63,12 @@ CORRECTION = {"day": "thursday", "source": "192.168.10.8", "subnet": "192.168.10
               "start": dt.datetime(2017, 7, 6, 14, 33), "end": dt.datetime(2017, 7, 6, 15, 45),
               "lab_utc_offset_hours": -3, "cls": "scan"}
 
+# Feature sets (docs/model_v2.md). "no_rtt" also drops the handshake timings,
+# which measure how far the connecting machine is from the sensor: in CIC every
+# attack connects from outside the firewall.
+VARIANTS = {"base": list(PRODUCTION_DROP),
+            "no_rtt": list(PRODUCTION_DROP) + ["tcprtt", "synack", "ackdat"]}
+
 # docs/model_v2.md, "Decision rules"
 M1_MIN_AUC = 0.80
 M1_MAX_FALSE_ALARM = 0.01
@@ -144,12 +150,12 @@ def _weights(train: pd.DataFrame) -> np.ndarray:
     return (1.0 / n).to_numpy() * len(train) / train["dataset"].nunique()
 
 
-def fit(train: pd.DataFrame):
+def fit(train: pd.DataFrame, drop=tuple(PRODUCTION_DROP)):
     rng = np.random.default_rng(SEED)
     normal = train.index[train["cls"] == "normal"]
     calib = rng.choice(normal, size=max(1, int(len(normal) * CALIBRATION_SHARE)), replace=False)
     fit_rows = train.drop(index=calib)
-    model = _pipeline(class_weight=None, max_iter=300, drop=PRODUCTION_DROP)
+    model = _pipeline(class_weight=None, max_iter=300, drop=list(drop))
     model.fit(fit_rows[UNSW_FEATURES], (fit_rows["cls"] != "normal").astype(int),
               clf__sample_weight=_weights(fit_rows))
     s = model.predict_proba(train.loc[calib, UNSW_FEATURES])[:, 1]
@@ -192,39 +198,42 @@ def m1(r: dict) -> bool | None:
 
 # ---------------------------------------------------------------- the experiments
 
-def run_all(t: pd.DataFrame) -> dict:
+def run_all(t: pd.DataFrame, drop=tuple(PRODUCTION_DROP), importances: bool = False) -> dict:
     unsw_tr = t[(t["dataset"] == "unsw") & (t["part"] == "train")]
     unsw_te = t[(t["dataset"] == "unsw") & (t["part"] == "test")]
     cic = t[t["dataset"] == "cic"]
     days = [d for d in DAYS if (cic["part"] == d).any()]
     res: dict = {}
 
-    model, thr = fit(unsw_tr)
+    model, thr = fit(unsw_tr, drop)
     res["E4"] = {"train": "unsw", "test": "unsw test", **score(model, thr, unsw_te)}
     res["E1"] = {d: {"train": "unsw", "test": d, **score(model, thr, cic[cic["part"] == d])}
                  for d in days}
     print(f"[model_v2] E4 auc {res['E4']['auc']}; E1 done")
 
     if len(days):
-        model, thr = fit(cic)
+        model, thr = fit(cic, drop)
         res["E2"] = {"train": "cic (all days)", "test": "unsw test", **score(model, thr, unsw_te)}
         print(f"[model_v2] E2 auc {res['E2']['auc']}")
 
     res["E3"] = {}
     for d in days:
         train = pd.concat([unsw_tr, cic[cic["part"] != d]])
-        model, thr = fit(train)
-        res["E3"][d] = {"train": "unsw + other days", "test": d,
-                        **score(model, thr, cic[cic["part"] == d])}
+        model, thr = fit(train, drop)
+        test = cic[cic["part"] == d]
+        res["E3"][d] = {"train": "unsw + other days", "test": d, **score(model, thr, test)}
+        if importances and res["E3"][d]["auc"] is not None:
+            res["E3"][d]["top_features"] = _top_features(
+                model, test[UNSW_FEATURES], (test["cls"] != "normal").astype(int), k=5)
         print(f"[model_v2] E3 {d} auc {res['E3'][d]['auc']}")
 
-    res["D"] = dataset_check(t)
+    res["D"] = dataset_check(t, drop)
     res["M1"] = {"E1": {d: m1(r) for d, r in res["E1"].items()},
                  "E2": m1(res["E2"]) if "E2" in res else None}
     return res
 
 
-def dataset_check(t: pd.DataFrame) -> dict:
+def dataset_check(t: pd.DataFrame, drop=tuple(PRODUCTION_DROP)) -> dict:
     """Train a classifier to tell UNSW normal rows from CIC normal rows."""
     from sklearn.metrics import roc_auc_score
     from sklearn.model_selection import train_test_split
@@ -236,7 +245,7 @@ def dataset_check(t: pd.DataFrame) -> dict:
     y = (per["dataset"] == "cic").astype(int)
     Xtr, Xte, ytr, yte = train_test_split(per[UNSW_FEATURES], y, test_size=0.3,
                                           random_state=SEED, stratify=y)
-    m = _pipeline(class_weight=None, max_iter=200, drop=PRODUCTION_DROP)
+    m = _pipeline(class_weight=None, max_iter=200, drop=list(drop))
     m.fit(Xtr, ytr)
     p = m.predict_proba(Xte)[:, 1]
     imp = _top_features(m, Xte, yte)
@@ -259,12 +268,13 @@ def _pct(x):
     return "n/a" if x is None else f"{x:.3%}"
 
 
-def write_report(res: dict, info: dict, out: Path) -> None:
+def write_report(res: dict, info: dict, out: Path, variant: str = "base") -> None:
     def row(name, r, verdict=""):
         rec = ", ".join(f"{c} {v:.0%}" for c, v in r["recall"].items())
         return (f"| {name} | {r['test']} | {r['auc']} | {_pct(r['false_alarm'])} ({r['band']}) | "
                 f"{rec} | {verdict} |")
-    L = ["# Model v2, first cut", "", "Rules frozen in docs/model_v2.md before this run.", "",
+    L = [f"# Model v2, first cut ({variant}: dropped {', '.join(VARIANTS[variant])})", "",
+         "Rules frozen in docs/model_v2.md before this run.", "",
          "| Exp | Test | AUC | False alarms | Recall at the training threshold | M1 |",
          "|---|---|---|---|---|---|",
          row("E4", res["E4"])]
@@ -275,12 +285,17 @@ def write_report(res: dict, info: dict, out: Path) -> None:
         L.append(row("E2", res["E2"], "pass" if res["M1"]["E2"] else "fail"))
     for d, r in res["E3"].items():
         L.append(row("E3", r))
+    tops = {d: r["top_features"] for d, r in res["E3"].items() if r.get("top_features")}
+    if tops:
+        L += ["", "## E3: features each held-out model leaned on", ""]
+        L += [f"- {d}: {v}" for d, v in tops.items()]
     D = res["D"]
     L += ["", "## Dataset check (normal rows only)", "",
           f"Accuracy {D.get('accuracy')}, AUC {D.get('auc')}. Most telling features: "
           f"{D.get('most_telling_features')}", "",
           "## Data", "", "```", json.dumps(info, indent=1), "```"]
-    (out / "report.md").write_text("\n".join(L) + "\n")
+    name = "report.md" if variant == "base" else f"report_{variant}.md"
+    (out / name).write_text("\n".join(L) + "\n")
 
 
 def main() -> None:
@@ -291,15 +306,19 @@ def main() -> None:
     ap.add_argument("--csv-dir", type=Path, required=True)
     ap.add_argument("--out", type=Path, default=Path("data/processed/model_v2"))
     ap.add_argument("--rebuild", action="store_true", help="rebuild the cached training table")
+    ap.add_argument("--variant", choices=sorted(VARIANTS), default="base",
+                    help="feature set; no_rtt also drops the handshake timings")
     a = ap.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
     t, info = build_table(a.unsw_train, a.unsw_test, a.cic_dir, a.csv_dir,
                           cache=a.out / "table.pkl", rebuild=a.rebuild)
     print(f"[model_v2] table: {len(t):,} rows; {t.groupby(['dataset', 'cls']).size().to_dict()}")
-    res = run_all(t)
-    (a.out / "results.json").write_text(json.dumps(res, indent=1))
-    write_report(res, info, a.out)
-    print(f"[model_v2] -> {a.out / 'report.md'}")
+    res = run_all(t, VARIANTS[a.variant], importances=True)
+    res["variant"] = a.variant
+    suffix = "" if a.variant == "base" else f"_{a.variant}"
+    (a.out / f"results{suffix}.json").write_text(json.dumps(res, indent=1))
+    write_report(res, info, a.out, a.variant)
+    print(f"[model_v2] -> {a.out / ('report.md' if a.variant == 'base' else f'report_{a.variant}.md')}")
 
 
 if __name__ == "__main__":
