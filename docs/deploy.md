@@ -272,3 +272,52 @@ GROUP BY tester;
   deleted as soon as it is scored, whether scoring worked or not.
 - An upload is private to the tester who sent it, but it is not encrypted or
   scrubbed. Tell testers not to upload captures with sensitive traffic.
+
+## 7. Public demo mode
+
+For sharing a link widely (a LinkedIn post): anyone can open the demo day
+without a code, and personal codes keep everything else.
+
+| Who | Can |
+|---|---|
+| Public visitor ("Try the demo, no code needed") | Demo day only; their own chat (one at a time); 8 questions a day each |
+| Personal code (`DA_ACCESS_CODES`) | Everything, including uploads private to that code |
+
+How it works: the page gives each browser a random id it keeps, and the server
+treats `public:<id>` as that visitor. Visitors never share chats, limits or
+uploads. Ids are not secret and a visitor can clear theirs, so the caps that
+protect spend are the global ones: public questions per day across all
+visitors, public chat slots, and the daily token budget.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DA_PUBLIC_DEMO` | off | `1` turns the public entry on |
+| `DA_PUBLIC_QUESTIONS_PER_VISITOR` | 8 | questions per visitor per UTC day |
+| `DA_PUBLIC_DAILY_QUESTIONS` | 200 | questions per UTC day across all visitors |
+| `DA_PUBLIC_MAX_SESSIONS` | 3 | chat slots visitors may hold at once (of `DA_MAX_SESSIONS`, 6) |
+| `DA_CONTACT_URL` | none | "ask for a code" and "get in touch" links |
+| `DA_REPO_URL` | the GitHub repo | "code and write-up" link |
+
+Turn it on without rebuilding:
+
+```bash
+gcloud run services update detection-analyst --region $REGION --update-env-vars \
+  DA_PUBLIC_DEMO=1,DA_CONTACT_URL=https://www.linkedin.com/in/<you>
+```
+
+Counters live in memory, so they reset on a restart or a new revision; the
+token budget (`DA_DAILY_TOKEN_BUDGET`) is the hard cap on model spend.
+
+**Before posting the link**, cap spend outside the app as well:
+
+- Anthropic: set a monthly spend limit for the API key's workspace in the
+  Anthropic Console.
+- Google Cloud: a billing budget with email alerts, e.g.
+  ```bash
+  gcloud billing budgets create --billing-account=$(gcloud billing projects describe $PROJECT \
+      --format='value(billingAccountName)' | cut -d/ -f2) \
+    --display-name="detection-analyst" --budget-amount=25USD \
+    --threshold-rule=percent=0.5 --threshold-rule=percent=0.9 --threshold-rule=percent=1.0
+  ```
+  A budget alerts; it does not stop spending. `--max-instances 1` on the
+  service and uploads being off for visitors are what bound Cloud Run cost.

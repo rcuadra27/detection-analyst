@@ -32,7 +32,8 @@ def test_unknown_code_is_refused():
     with make_client([]) as c:
         assert c.post("/api/login", json={"code": "nope"}).status_code == 401
         assert c.get("/api/events").status_code == 401
-        assert c.post("/api/login", json={"code": "code-a"}).json() == {"tester": "tester-1"}
+        assert c.post("/api/login", json={"code": "code-a"}).json() == {"tester": "tester-1", "public": False,
+                                                                       "uploads": True}
 
 
 def test_app_refuses_to_start_without_codes(monkeypatch):

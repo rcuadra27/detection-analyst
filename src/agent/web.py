@@ -33,6 +33,7 @@ import datetime as dt
 import hmac
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -56,6 +57,20 @@ MAX_QUESTION_CHARS = 2000
 MAX_UPLOADS_PER_TESTER = int(os.environ.get("DA_MAX_UPLOADS_PER_TESTER", "5"))
 MAX_UPLOAD_NAME = 80
 MAX_LOGGED_ANSWER_CHARS = 4000
+
+# Public demo mode (docs/deploy.md): anyone can open the demo day without a code.
+# Each browser gets its own identity (a random id it keeps), so visitors never share
+# chats or limits. Public visitors cannot upload, and their questions are capped per
+# visitor and per day across all visitors, on top of the token budget.
+PUBLIC_DEMO = os.environ.get("DA_PUBLIC_DEMO") == "1"
+PUBLIC_CODE_PREFIX = "public:"
+PUBLIC_LABEL_PREFIX = "visitor-"
+PUBLIC_QUESTIONS_PER_VISITOR = int(os.environ.get("DA_PUBLIC_QUESTIONS_PER_VISITOR", "8"))
+PUBLIC_DAILY_QUESTIONS = int(os.environ.get("DA_PUBLIC_DAILY_QUESTIONS", "200"))
+PUBLIC_MAX_SESSIONS = int(os.environ.get("DA_PUBLIC_MAX_SESSIONS", "3"))
+CONTACT_URL = os.environ.get("DA_CONTACT_URL", "")
+REPO_URL = os.environ.get("DA_REPO_URL", "https://github.com/rcuadra27/detection-analyst")
+_VISITOR_ID = re.compile(r"[0-9a-f]{16,64}")
 
 
 # ------------------------------------------------------------------ logging
@@ -88,18 +103,62 @@ def parse_access_codes(raw: str | None) -> dict[str, str]:
     return codes
 
 
+def is_public(tester: str) -> bool:
+    return tester.startswith(PUBLIC_LABEL_PREFIX)
+
+
 class AccessControl:
-    def __init__(self, codes: dict[str, str], allow_open: bool = False):
+    def __init__(self, codes: dict[str, str], allow_open: bool = False, public: bool = False):
         self.codes = codes
         self.allow_open = allow_open
+        self.public = public
 
     def tester(self, code: str | None) -> str:
         if self.allow_open and not self.codes:
             return "local"
+        if self.public and code and code.startswith(PUBLIC_CODE_PREFIX):
+            visitor = code[len(PUBLIC_CODE_PREFIX):].lower()
+            if _VISITOR_ID.fullmatch(visitor):
+                return PUBLIC_LABEL_PREFIX + visitor[:12]
         for known, label in self.codes.items():
             if code and hmac.compare_digest(code.encode(), known.encode()):
                 return label
         raise HTTPException(status_code=401, detail="Unknown access code.")
+
+
+# ------------------------------------------------------------------ public quota
+
+class PublicQuota:
+    """Questions per public visitor and across all public visitors, per UTC day.
+    Resets with the day or a restart (the token budget still caps spend)."""
+
+    def __init__(self, per_visitor: int, per_day: int):
+        self.per_visitor, self.per_day = per_visitor, per_day
+        self.day = dt.datetime.now(dt.timezone.utc).date()
+        self.counts: dict[str, int] = {}
+
+    def _roll(self) -> None:
+        today = dt.datetime.now(dt.timezone.utc).date()
+        if today != self.day:
+            self.day, self.counts = today, {}
+
+    def left(self, visitor: str) -> int:
+        self._roll()
+        total_left = self.per_day - sum(self.counts.values())
+        return max(0, min(self.per_visitor - self.counts.get(visitor, 0), total_left))
+
+    def check(self, visitor: str) -> None:
+        self._roll()
+        if sum(self.counts.values()) >= self.per_day:
+            raise HTTPException(429, "The public demo has reached today's question limit. "
+                                     "Try again tomorrow, or ask for a personal access code.")
+        if self.counts.get(visitor, 0) >= self.per_visitor:
+            raise HTTPException(429, f"The public demo allows {self.per_visitor} questions per "
+                                     "visitor a day. Ask for a personal access code for more.")
+
+    def use(self, visitor: str) -> None:
+        self._roll()
+        self.counts[visitor] = self.counts.get(visitor, 0) + 1
 
 
 # ------------------------------------------------------------------ budget
@@ -334,7 +393,8 @@ def _default_llm_factory():
 
 def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
                model: str = DEFAULT_MODEL, daily_token_budget: int = DAILY_TOKEN_BUDGET,
-               max_sessions: int = MAX_SESSIONS, upload_backend=None) -> FastAPI:
+               max_sessions: int = MAX_SESSIONS, upload_backend=None,
+               public_demo: bool | None = None) -> FastAPI:
     os.chdir(REPO_ROOT)
     codes = parse_access_codes(os.environ.get("DA_ACCESS_CODES")) if access_codes is None \
         else access_codes
@@ -342,7 +402,13 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
     if not codes and not allow_open:
         raise RuntimeError("Set DA_ACCESS_CODES (or DA_ALLOW_NO_AUTH=1 for local use only).")
 
-    access = AccessControl(codes, allow_open)
+    public = PUBLIC_DEMO if public_demo is None else public_demo
+    access = AccessControl(codes, allow_open, public)
+    quota = PublicQuota(PUBLIC_QUESTIONS_PER_VISITOR, PUBLIC_DAILY_QUESTIONS)
+
+    def no_public(tester: str) -> None:
+        if is_public(tester):
+            raise HTTPException(403, "Uploading a capture needs a personal access code.")
     budget = DailyBudget(daily_token_budget)
     manager = SessionManager(llm_factory or _default_llm_factory, model, max_sessions)
     turns: dict[str, dict] = {}       # turn_id -> {session, tester}
@@ -371,9 +437,19 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
     def healthz():
         return {"ok": True}
 
+    @app.get("/api/config")
+    def config():
+        """What the sign-in page needs before anyone signs in."""
+        return {"public_demo": access.public, "contact_url": CONTACT_URL, "repo_url": REPO_URL}
+
     @app.post("/api/login")
     def login(body: LoginBody):
-        return {"tester": access.tester(body.code)}
+        tester = access.tester(body.code)
+        if is_public(tester):
+            log_event("public_visit", tester=tester)
+            return {"tester": tester, "public": True, "uploads": False,
+                    "questions_left": quota.left(tester)}
+        return {"tester": tester, "public": False, "uploads": True}
 
     uploads = upload_backend if upload_backend is not None else backend_from_env()
 
@@ -396,14 +472,18 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
     @app.get("/api/uploads")
     def list_uploads(x_access_code: str | None = Header(default=None)):
         tester = access.tester(x_access_code)
+        if is_public(tester):
+            return {"uploads": [], "max_upload_mb": uploads.max_bytes // 2**20,
+                    "uploads_enabled": False}
         mine = [_public(r) for r in uploads.list_status() if r.get("tester") == tester]
         return {"uploads": sorted(mine, key=lambda r: r.get("created", ""), reverse=True),
-                "max_upload_mb": uploads.max_bytes // 2**20}
+                "max_upload_mb": uploads.max_bytes // 2**20, "uploads_enabled": True}
 
     @app.post("/api/uploads")
     def create_upload(body: UploadBody, x_access_code: str | None = Header(default=None)):
         """Step 1: register an upload and get somewhere to put the file."""
         tester = access.tester(x_access_code)
+        no_public(tester)
         if body.size > uploads.max_bytes:
             raise HTTPException(413, f"Captures are limited to {uploads.max_bytes // 2**20} MB.")
         if body.size <= 0:
@@ -474,6 +554,7 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
     def start_upload(ds_id: str, x_access_code: str | None = Header(default=None)):
         """Step 3: the file is in place; score it."""
         tester = access.tester(x_access_code)
+        no_public(tester)
         rec = owned(ds_id, tester)
         if rec.get("state") != "waiting_upload":
             raise HTTPException(409, f"This upload is already {rec.get('state')}.")
@@ -508,11 +589,23 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
         dataset = body.dataset if body else None
         scenario_dir = None
         if dataset:
+            no_public(tester)
             owned(dataset, tester, need_done=True)
             scenario_dir = uploads.local_store(dataset)
+        left = MAX_QUESTIONS_PER_SESSION
+        if is_public(tester):
+            # One chat per visitor, and a share of the slots for all visitors together.
+            for old in [s for s in manager.sessions.values() if s.tester == tester]:
+                await manager.end(old.id, reason="replaced")
+            public_now = [s for s in manager.sessions.values() if is_public(s.tester)]
+            if len(public_now) >= PUBLIC_MAX_SESSIONS:
+                idle = [s for s in public_now if not s.busy]
+                if not idle:
+                    raise HTTPException(503, "The public demo is busy. Try again in a minute.")
+                await manager.end(min(idle, key=lambda s: s.last_used).id, reason="evicted")
+            left = min(left, quota.left(tester))
         s = await manager.create(tester, scenario_dir, dataset)
-        return {"session_id": s.id, "questions_left": MAX_QUESTIONS_PER_SESSION,
-                "dataset": dataset}
+        return {"session_id": s.id, "questions_left": left, "dataset": dataset}
 
     @app.get("/api/sessions/{session_id}/progress")
     def progress(session_id: str, x_access_code: str | None = Header(default=None)):
@@ -528,12 +621,16 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
             raise HTTPException(409, "Still working on the previous question.")
         if s.questions >= MAX_QUESTIONS_PER_SESSION:
             raise HTTPException(429, "This chat hit its question limit. Start a new chat.")
+        if is_public(tester):
+            quota.check(tester)
         if budget.exhausted():
             log_event("budget_exhausted", severity="WARNING", tester=tester, **budget.status())
             raise HTTPException(429, "The daily usage budget is used up. Try again tomorrow.")
 
         s.busy, s.progress = True, []
         s.questions += 1
+        if is_public(tester):
+            quota.use(tester)
         s.last_used = time.monotonic()
         turn_id = f"turn-{uuid.uuid4().hex[:10]}"
         started = time.perf_counter()
@@ -574,7 +671,9 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
                 "latency_ms": latency_ms, "usage": turn.usage,
                 "hit_step_cap": turn.hit_step_cap, "stop_reasons": turn.stop_reasons,
                 "recoveries": turn.recoveries, "tool_calls": turn.tool_calls,
-                "questions_left": MAX_QUESTIONS_PER_SESSION - s.questions, **summary}
+                "questions_left": (min(MAX_QUESTIONS_PER_SESSION - s.questions, quota.left(tester))
+                                   if is_public(tester) else MAX_QUESTIONS_PER_SESSION - s.questions),
+                **summary}
 
     @app.post("/api/feedback")
     def feedback(body: FeedbackBody, x_access_code: str | None = Header(default=None)):

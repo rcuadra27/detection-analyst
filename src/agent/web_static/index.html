@@ -112,6 +112,16 @@
   .pill.pill-busy { background: var(--accent-soft); color: var(--accent); }
   .pill.pill-error { background: var(--crit-soft); color: var(--crit); }
   .home-foot { margin-top: 18px; color: var(--muted); font-size: 13px; max-width: 80ch; }
+  .about { margin-top: 28px; padding: 18px 22px; border: 1px solid var(--line); border-radius: 10px;
+           background: var(--surface); }
+  .about h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+  .about ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+  .about li { margin: 4px 0; } .about li b { color: var(--ink); font-weight: 600; }
+  .about .links { margin: 10px 0 0; font-size: 14px; }
+  .about .links a, .home-foot a, #publicBox a { color: var(--accent); }
+  #publicBox .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 18px 0 14px; }
+  #publicBox .or::before, #publicBox .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  #publicBox .small { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
 
   /* ---------- top bar ---------- */
   .top { display: flex; align-items: center; gap: 16px; padding: 0 20px; height: 56px;
@@ -288,6 +298,12 @@
   <input id="code" type="password" placeholder="Access code" autocomplete="off" aria-label="Access code">
   <button class="btn primary" id="go">Sign in</button>
   <div id="loginErr" class="err hidden" style="margin-top:12px"></div>
+  <div id="publicBox" class="hidden">
+    <div class="or"><span>or</span></div>
+    <button class="btn" id="tryDemo">Try the demo, no code needed</button>
+    <p class="small">Explore a simulated day on a small network and question the agent.
+      Uploading your own capture needs a personal code.</p>
+  </div>
 </div>
 
 <div id="app" class="hidden">
@@ -316,7 +332,7 @@
           <button class="btn primary go" id="openDemo">Open the demo day</button>
         </article>
 
-        <article class="choice" aria-labelledby="capTitle">
+        <article class="choice" id="capChoice" aria-labelledby="capTitle">
           <h2 id="capTitle">Your capture</h2>
           <p>Upload a packet capture. Zeek builds its flows, the detector scores every one, and
             the noise baseline is measured on your traffic before you see any alerts.</p>
@@ -335,7 +351,7 @@
         </article>
       </div>
 
-      <section class="history" aria-labelledby="histTitle">
+      <section class="history" id="history" aria-labelledby="histTitle">
         <div class="history-head"><h2 id="histTitle">Your uploads</h2><span id="histNote"></span></div>
         <div class="table-wrap"><table>
           <thead><tr><th>Capture</th><th>Status</th><th class="hide-sm">Flows</th><th class="hide-sm">Flagged</th>
@@ -343,7 +359,23 @@
           <tbody id="uploadsBody"><tr class="empty"><td colspan="7">Nothing uploaded yet.</td></tr></tbody>
         </table></div>
       </section>
-      <p class="home-foot">Uploads are private to your access code. Do not upload captures that contain
+      <section class="about" aria-labelledby="aboutTitle">
+        <h2 id="aboutTitle">What this is</h2>
+        <ul>
+          <li><b>Real:</b> the pipeline (packets to Zeek flows to features), the trained detector's
+            scores, behavioral rules for scans, floods and brute force, and an agent that investigates
+            through read-only tools over MCP, with its guardrails enforced in code.</li>
+          <li><b>Simulated:</b> the demo day's hosts and attacks are planted; every flow on it comes from
+            the UNSW-NB15 test set and is scored by the real detector.</li>
+          <li><b>Limits, measured:</b> on a network unlike its training data the per-flow model flags many
+            normal flows; the rules caught 85-100% of scans, floods and brute force on a network they
+            had never seen. Web attacks and botnets are not covered yet.</li>
+          <li>The agent recommends; it never blocks or changes anything. Its triages wait for a person
+            to approve or reject them.</li>
+        </ul>
+        <p class="links" id="aboutLinks"></p>
+      </section>
+      <p class="home-foot" id="homeFoot">Uploads are private to your access code. Do not upload captures that contain
         sensitive traffic: they are not scrubbed.</p>
     </div>
   </section>
@@ -379,6 +411,25 @@ const STARTERS = [
   "Write the end-of-shift report.",
 ];
 let code = sessionStorage.getItem("da_code") || "";
+let isPublic = false, siteConfig = { public_demo: false, contact_url: "", repo_url: "" };
+function visitorId() {
+  // A random id this browser keeps, so each public visitor has their own chats and limits.
+  let id = null;
+  try { id = localStorage.getItem("da_visitor"); } catch (e) {}
+  if (!id || !/^[0-9a-f]{24}$/.test(id)) {
+    id = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, "0")).join("");
+    try { localStorage.setItem("da_visitor", id); } catch (e) {}
+  }
+  return id;
+}
+async function loadConfig() {
+  try { siteConfig = await (await fetch("/api/config")).json(); } catch (e) {}
+  if (siteConfig.public_demo) $("publicBox").classList.remove("hidden");
+  const links = [];
+  if (siteConfig.repo_url) links.push(`<a href="${esc(siteConfig.repo_url)}" target="_blank" rel="noopener">Code and write-up on GitHub</a>`);
+  if (siteConfig.contact_url) links.push(`<a href="${esc(siteConfig.contact_url)}" target="_blank" rel="noopener">Get in touch</a>`);
+  $("aboutLinks").innerHTML = links.join(" · ");
+}
 let sessionId = null, busy = false;
 let dataset = null;   // {dataset, name, n_flows, n_flagged, false_positive_rate, ...} when on an upload
 let inWorkspace = false;
@@ -450,7 +501,14 @@ async function login() {
   try {
     const r = await api("/api/login", { method: "POST", body: JSON.stringify({ code }) });
     sessionStorage.setItem("da_code", code);
-    $("who").textContent = r.tester;
+    isPublic = !!r.public;
+    $("who").textContent = isPublic ? "Public demo" : r.tester;
+    $("capChoice").classList.toggle("hidden", isPublic);
+    $("history").classList.toggle("hidden", isPublic);
+    $("homeFoot").innerHTML = isPublic
+      ? `Uploading your own capture needs a personal access code${siteConfig.contact_url
+          ? `: <a href="${esc(siteConfig.contact_url)}" target="_blank" rel="noopener">ask for one</a>` : ""}.`
+      : "Uploads are private to your access code. Do not upload captures that contain sensitive traffic: they are not scrubbed.";
     $("login").classList.add("hidden"); $("app").classList.remove("hidden");
     showHome(); loadDemoFacts();
   } catch (e) {
@@ -868,6 +926,7 @@ function renderAnswer(r) {
 $("send").onclick = () => ask($("q").value);
 $("q").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("q").value); } });
 $("go").onclick = login;
+$("tryDemo").onclick = () => { code = "public:" + visitorId(); $("code").value = ""; login(); };
 $("code").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
 $("newChat").onclick = () => { if (!busy) newChat(); };
 $("switchData").onclick = () => { if (!busy) showHome(); };
@@ -878,7 +937,7 @@ const drop = $("drop");
 ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) uploadPcap(f); });
-if (code) login();
+loadConfig().then(() => { if (code) login(); });
 </script>
 </body>
 </html>
