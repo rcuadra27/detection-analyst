@@ -112,3 +112,18 @@ never picks the threshold.
 
 If those hold, two labs are not enough, and the next step is CTU-13 (and a
 CIC-2018 slice) before any production decision.
+
+## Running it
+
+```
+python -m src.detect.model_v2 --csv-dir "data/raw/cic2017/csv/TrafficLabelling "
+```
+
+Defaults: UNSW CSVs in `data/raw/`, CIC features in `data/processed/cic2017/`,
+output in `data/processed/model_v2/` (`report.md`, `results.json`, and the
+training table cached as `table.pkl`; `--rebuild` rebuilds it). Each fit uses
+the production pipeline without TTL; datasets carry equal total weight.
+
+## Results
+
+(none yet)
