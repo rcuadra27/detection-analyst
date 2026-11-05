@@ -431,7 +431,9 @@ def create_app(llm_factory=None, access_codes: dict[str, str] | None = None,
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        # no-cache: the browser may keep the page but must check it is current, so a
+        # new deploy shows up on the next load instead of after a heuristic expiry.
+        return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/healthz")
     def healthz():

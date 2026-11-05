@@ -176,3 +176,8 @@ def test_triage_card_uses_the_stored_triage_not_the_raw_input():
     t = summarize_turn(turn)["triages"][0]
     assert t["recommended_action"] == "Isolate it." and t["explanation"] == "x"
     assert t["confidence"] == 0.8 and t["event_id"] == "EV-1"
+
+
+def test_page_is_revalidated_on_every_load():
+    with make_client([]) as c:
+        assert c.get("/").headers["cache-control"] == "no-cache"
