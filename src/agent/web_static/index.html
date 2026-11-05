@@ -266,6 +266,10 @@
 
   @media (max-width: 800px) {
     .top { padding: 0 14px; } .scenario, .who { display: none; } .brand { white-space: nowrap; }
+    /* phone: the brand on its own row, the header buttons on the next, so none fall off-screen */
+    .top { flex-wrap: wrap; height: auto; min-height: 56px; padding: 8px 14px; row-gap: 8px; gap: 8px; }
+    .top .brand { flex-basis: 100%; } .top .spacer { display: none; }
+    .top .btn { padding: 6px 10px; font-size: 14px; }
     .triage-head { flex-wrap: wrap; } .triage-head .status { margin-left: 0; flex-basis: 100%; }
     #app:not(.hidden) { height: auto; overflow: visible; }
     .wrap { grid-template-columns: 1fr; grid-template-rows: auto; height: auto; }
@@ -314,6 +318,7 @@
     <div class="who"><span id="who"></span><br><span id="left"></span></div>
     <button class="btn hidden" id="switchData">Change data</button>
     <button class="btn hidden" id="newChat">New chat</button>
+    <button class="btn quiet" id="signOut">Sign out</button>
   </header>
 
   <section id="home" aria-labelledby="homeTitle">
@@ -503,6 +508,7 @@ async function login() {
     sessionStorage.setItem("da_code", code);
     isPublic = !!r.public;
     $("who").textContent = isPublic ? "Public demo" : r.tester;
+    $("signOut").textContent = isPublic ? "Use an access code" : "Sign out";
     $("capChoice").classList.toggle("hidden", isPublic);
     $("history").classList.toggle("hidden", isPublic);
     $("homeFoot").innerHTML = isPublic
@@ -926,6 +932,13 @@ function renderAnswer(r) {
 $("send").onclick = () => ask($("q").value);
 $("q").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("q").value); } });
 $("go").onclick = login;
+// Back to the sign-in page. The chat on the server closes itself when idle; a public
+// visitor keeps their browser id, so leaving and coming back does not reset their limit.
+$("signOut").onclick = () => {
+  if (busy) return;
+  try { sessionStorage.removeItem("da_code"); } catch (e) {}
+  location.reload();
+};
 $("tryDemo").onclick = () => { code = "public:" + visitorId(); $("code").value = ""; login(); };
 $("code").addEventListener("keydown", e => { if (e.key === "Enter") login(); });
 $("newChat").onclick = () => { if (!busy) newChat(); };
