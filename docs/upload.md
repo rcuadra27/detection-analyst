@@ -128,7 +128,7 @@ in the store's `false_positive_rate_source`, which the agent sees. The estimate
 is still computed and stored (`meta.json`, `baseline.used: false`).
 
 **Likely cause (not yet checked):** the estimator assumes benign false positives
-are spread evenly across hosts. README §6 already found that realistic false
+are spread evenly across hosts. docs/detector.md §6 already found that realistic false
 positives cluster on a few benign hosts. Those hosts look improbable under the
 pooled rate, are trimmed like attackers, the rate is recomputed lower, more are
 trimmed, and the estimate falls toward the rate of hosts that were never

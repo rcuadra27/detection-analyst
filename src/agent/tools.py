@@ -47,7 +47,7 @@ MAX_EVIDENCE_CHARS = 200
 MAX_DESCRIPTION_CHARS = 1500
 MAX_IDS_PER_LOOKUP = 8
 MAX_EVENTS_LISTED = 25
-# Stage-1 false-positive rate on held-out UNSW traffic at the 0.85 threshold (README
+# Stage-1 false-positive rate on held-out UNSW traffic at the 0.85 threshold (docs/detector.md
 # §2). A benign host flags roughly this share of its flows by chance. This is the
 # default for the simulated days, which sample that test split. A store built from
 # an uploaded pcap carries its own estimate in meta.json (src/ingest/baseline.py):
