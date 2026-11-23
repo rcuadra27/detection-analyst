@@ -5,7 +5,7 @@ alerts from two detectors, and ask an agent to investigate them. The agent uses
 MCP tools, grounds every claim in tool results and MITRE ATT&CK, and files
 triages for a person to review.
 
-**Public demo:** DEMO_URL (8 questions per visitor, no uploads; uploads need an
+**Public demo:** https://detection-analyst-701568797950.us-west1.run.app/ (8 questions per visitor, no uploads; uploads need an
 access code).
 
 ![Architecture](docs/architecture.svg)
